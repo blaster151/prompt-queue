@@ -1,0 +1,714 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ChatGPT Prompt Queuer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            width: 450px;
+            min-height: 550px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .container {
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        .header h1 {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 5px;
+        }
+
+        .header p {
+            font-size: 12px;
+            opacity: 0.8;
+        }
+
+        .tab-container {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            padding: 2px;
+            margin-bottom: 20px;
+        }
+
+        .tabs {
+            display: flex;
+            background: transparent;
+        }
+
+        .tab {
+            flex: 1;
+            padding: 8px;
+            text-align: center;
+            background: transparent;
+            border: none;
+            color: white;
+            cursor: pointer;
+            border-radius: 6px;
+            font-size: 11px;
+            transition: all 0.3s ease;
+        }
+
+        .tab.active {
+            background: rgba(255, 255, 255, 0.2);
+            font-weight: 600;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .input-group {
+            margin-bottom: 15px;
+        }
+
+        .input-group label {
+            display: block;
+            font-size: 12px;
+            margin-bottom: 5px;
+            font-weight: 500;
+        }
+
+        .input-group textarea {
+            width: 100%;
+            min-height: 80px;
+            padding: 10px;
+            border: none;
+            border-radius: 6px;
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            font-size: 12px;
+            resize: vertical;
+            font-family: inherit;
+        }
+
+        .input-group textarea::placeholder {
+            color: rgba(255, 255, 255, 0.6);
+        }
+
+        .input-group input {
+            width: 100%;
+            padding: 10px;
+            border: none;
+            border-radius: 6px;
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            font-size: 12px;
+        }
+
+        .input-group input::placeholder {
+            color: rgba(255, 255, 255, 0.6);
+        }
+
+        .button {
+            width: 100%;
+            padding: 12px;
+            border: none;
+            border-radius: 6px;
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-bottom: 10px;
+        }
+
+        .button:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        .button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .button.primary {
+            background: #4CAF50;
+        }
+
+        .button.primary:hover {
+            background: #45a049;
+        }
+
+        .button.danger {
+            background: #f44336;
+        }
+
+        .button.danger:hover {
+            background: #da190b;
+        }
+
+        .button.warning {
+            background: #ff9800;
+        }
+
+        .button.warning:hover {
+            background: #f57c00;
+        }
+
+        .queue-list {
+            max-height: 200px;
+            overflow-y: auto;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 6px;
+            padding: 10px;
+            margin-bottom: 15px;
+        }
+
+        .queue-item {
+            display: flex;
+            align-items: center;
+            padding: 8px;
+            margin-bottom: 5px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 4px;
+            font-size: 12px;
+        }
+
+        .queue-item:last-child {
+            margin-bottom: 0;
+        }
+
+        .queue-item .index {
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 10px;
+            font-weight: 600;
+            margin-right: 10px;
+            flex-shrink: 0;
+        }
+
+        .queue-item .text {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .queue-item .remove {
+            background: none;
+            border: none;
+            color: #ff6b6b;
+            cursor: pointer;
+            font-size: 14px;
+            padding: 2px;
+            margin-left: 5px;
+        }
+
+        .queue-item .status {
+            margin-left: 5px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .queue-item.processing {
+            background: rgba(255, 152, 0, 0.2);
+            border-left: 3px solid #ff9800;
+        }
+
+        .queue-item.completed {
+            background: rgba(76, 175, 80, 0.1);
+            border-left: 3px solid #4CAF50;
+            opacity: 0.7;
+        }
+
+        .progress {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 6px;
+            padding: 15px;
+            margin-bottom: 15px;
+            text-align: center;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 6px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 3px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: #4CAF50;
+            transition: width 0.3s ease;
+        }
+
+        .status {
+            font-size: 12px;
+            opacity: 0.8;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 20px;
+            opacity: 0.6;
+        }
+
+        .empty-state p {
+            font-size: 12px;
+            margin-bottom: 10px;
+        }
+
+        .help-text {
+            font-size: 10px;
+            opacity: 0.7;
+            margin-top: 5px;
+            line-height: 1.4;
+        }
+
+        .tabs-info {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 6px;
+            padding: 10px;
+            margin-bottom: 15px;
+        }
+
+        .tab-info {
+            display: flex;
+            align-items: center;
+            padding: 8px;
+            margin-bottom: 5px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 4px;
+            font-size: 11px;
+        }
+
+        .tab-info:last-child {
+            margin-bottom: 0;
+        }
+
+        .tab-info .status-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 8px;
+            flex-shrink: 0;
+        }
+
+        .tab-info .status-indicator.active {
+            background: #4CAF50;
+        }
+
+        .tab-info .status-indicator.inactive {
+            background: #9e9e9e;
+        }
+
+        .tab-info .tab-details {
+            flex: 1;
+        }
+
+        .tab-info .tab-id {
+            font-weight: 600;
+            margin-bottom: 2px;
+        }
+
+        .tab-info .tab-status {
+            opacity: 0.7;
+            font-size: 10px;
+        }
+
+        .mode-selector {
+            display: flex;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 6px;
+            padding: 2px;
+            margin-bottom: 15px;
+        }
+
+        .mode-button {
+            flex: 1;
+            padding: 8px;
+            text-align: center;
+            background: transparent;
+            border: none;
+            color: white;
+            cursor: pointer;
+            border-radius: 4px;
+            font-size: 11px;
+            transition: all 0.3s ease;
+        }
+
+        .mode-button.active {
+            background: rgba(255, 255, 255, 0.2);
+            font-weight: 600;
+        }
+
+        .stats {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 15px;
+            font-size: 11px;
+            opacity: 0.8;
+        }
+
+        .stat-item {
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 16px;
+            font-weight: 600;
+            display: block;
+        }
+
+        .history-controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        .history-controls .button {
+            flex: 1;
+            padding: 8px;
+            font-size: 12px;
+        }
+
+        .history-list {
+            max-height: 400px;
+            overflow-y: auto;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 6px;
+            padding: 10px;
+        }
+
+        .history-item {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 6px;
+            padding: 15px;
+            margin-bottom: 10px;
+            font-size: 12px;
+        }
+
+        .history-item:last-child {
+            margin-bottom: 0;
+        }
+
+        .history-prompt {
+            font-weight: 600;
+            margin-bottom: 10px;
+            color: #fff;
+        }
+
+        .history-response {
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 4px;
+            padding: 10px;
+            margin-top: 8px;
+            max-height: 200px;
+            overflow-y: auto;
+            line-height: 1.4;
+        }
+
+        .history-response img {
+            max-width: 100%;
+            height: auto;
+        }
+
+        .history-response pre {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 8px;
+            border-radius: 4px;
+            overflow-x: auto;
+            margin: 5px 0;
+        }
+
+        .history-response code {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 2px 4px;
+            border-radius: 2px;
+        }
+
+        .history-meta {
+            font-size: 10px;
+            opacity: 0.6;
+            margin-top: 8px;
+        }
+
+        .history-actions {
+            display: flex;
+            gap: 5px;
+            margin-top: 8px;
+        }
+
+        .history-actions button {
+            background: rgba(255, 255, 255, 0.1);
+            border: none;
+            color: white;
+            padding: 4px 8px;
+            border-radius: 3px;
+            font-size: 10px;
+            cursor: pointer;
+        }
+
+        .history-actions button:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        .queue-info {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 6px;
+            padding: 10px;
+            margin-bottom: 15px;
+        }
+
+        .info-text {
+            font-size: 11px;
+            opacity: 0.8;
+            margin: 0;
+            text-align: center;
+        }
+
+        /* Tabular data controls */
+        .tabular-controls {
+            margin-top: 10px;
+            padding: 10px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 6px;
+            border-left: 3px solid #4CAF50;
+        }
+
+        .tabular-info {
+            font-size: 11px;
+            color: #4CAF50;
+            margin-bottom: 8px;
+            font-weight: 500;
+        }
+
+        .column-selector {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .column-selector select {
+            flex: 1;
+            padding: 6px;
+            border: none;
+            border-radius: 4px;
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            font-size: 11px;
+        }
+
+        .copy-column-btn, .range-selector-btn, .copy-all-btn {
+            padding: 6px 10px;
+            border: none;
+            border-radius: 4px;
+            background: #4CAF50;
+            color: white;
+            font-size: 10px;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        .copy-column-btn:hover, .range-selector-btn:hover, .copy-all-btn:hover {
+            background: #45a049;
+        }
+
+        .range-selector-btn {
+            background: #ff9800;
+        }
+
+        .range-selector-btn:hover {
+            background: #f57c00;
+        }
+
+        .copy-all-btn {
+            background: #2196F3;
+        }
+
+        .copy-all-btn:hover {
+            background: #1976D2;
+        }
+
+        .column-preview {
+            margin-top: 8px;
+            max-height: 120px;
+            overflow-y: auto;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 4px;
+            padding: 8px;
+        }
+
+        .preview-header {
+            font-size: 10px;
+            color: #ff9800;
+            margin-bottom: 6px;
+            font-weight: 500;
+        }
+
+        .preview-content {
+            font-size: 10px;
+        }
+
+        .preview-item {
+            padding: 2px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .preview-item:last-child {
+            border-bottom: none;
+        }
+
+        .preview-more {
+            font-size: 9px;
+            color: rgba(255, 255, 255, 0.6);
+            font-style: italic;
+            margin-top: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🤖 ChatGPT Prompt Queuer</h1>
+            <p>Queue and automatically send multiple prompts</p>
+        </div>
+
+        <div class="tab-container">
+            <div class="tabs">
+                <button class="tab active" data-tab="manual">Manual</button>
+                <button class="tab" data-tab="matrix">Matrix</button>
+                <button class="tab" data-tab="queue">Queue</button>
+                <button class="tab" data-tab="multi">Multi-Tab</button>
+                <button class="tab" data-tab="history">History</button>
+            </div>
+        </div>
+
+        <!-- Manual Tab -->
+        <div class="tab-content active" id="manual">
+            <div class="input-group">
+                <label for="single-prompt">Single Prompt:</label>
+                <textarea id="single-prompt" placeholder="Enter your prompt here..."></textarea>
+            </div>
+            <button class="button primary" id="add-single">Add to Queue</button>
+        </div>
+
+        <!-- Matrix Tab -->
+        <div class="tab-content" id="matrix">
+            <div class="input-group">
+                <label for="matrix-input">Paste Matrix Data:</label>
+                <textarea id="matrix-input" placeholder="Paste your tab-separated matrix data here...&#10;Format: Column1&#9;Column2&#9;Column3&#9;Column4&#10;Supports 2-4 columns"></textarea>
+                <div class="help-text">
+                    Expected format: 2-4 columns separated by tabs. First row is header and will be skipped.
+                </div>
+            </div>
+            <button class="button primary" id="parse-matrix">Parse & Add to Queue</button>
+        </div>
+
+        <!-- Queue Tab -->
+        <div class="tab-content" id="queue">
+            <div class="mode-selector">
+                <button class="mode-button active" data-mode="single">Single Tab</button>
+                <button class="mode-button" data-mode="multi">Multi Tab</button>
+            </div>
+
+            <div class="progress" id="progress" style="display: none;">
+                <div class="status" id="status">Processing...</div>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progress-fill"></div>
+                </div>
+                <div class="status" id="progress-text">0 / 0</div>
+            </div>
+
+            <div class="queue-list" id="queue-list">
+                <div class="empty-state">
+                    <p>No prompts in queue</p>
+                    <p>Add prompts from Manual or Matrix tabs</p>
+                </div>
+            </div>
+
+            <div class="queue-info" id="queue-info" style="display: none;">
+                <p class="info-text">💡 You can build your queue from any tab. Navigate to ChatGPT to start processing.</p>
+            </div>
+
+            <button class="button primary" id="start-queue" disabled>Start Queue</button>
+            <button class="button warning" id="stop-queue" disabled>Stop Queue</button>
+            <button class="button danger" id="clear-queue">Clear Queue</button>
+        </div>
+
+        <!-- Multi-Tab Tab -->
+        <div class="tab-content" id="multi">
+            <div class="stats" id="multi-stats">
+                <div class="stat-item">
+                    <span class="stat-value" id="active-tabs-count">0</span>
+                    <span>Active Tabs</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-value" id="queue-length">0</span>
+                    <span>Queue Length</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-value" id="completed-count">0</span>
+                    <span>Completed</span>
+                </div>
+            </div>
+
+            <div class="tabs-info" id="tabs-info">
+                <div class="empty-state">
+                    <p>No ChatGPT tabs detected</p>
+                    <p>Open multiple ChatGPT tabs to use multi-tab mode</p>
+                </div>
+            </div>
+
+            <div class="progress" id="multi-progress" style="display: none;">
+                <div class="status" id="multi-status">Processing across multiple tabs...</div>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="multi-progress-fill"></div>
+                </div>
+                <div class="status" id="multi-progress-text">0 / 0</div>
+            </div>
+
+            <button class="button primary" id="start-multi-queue" disabled>Start Multi-Tab Queue</button>
+            <button class="button warning" id="stop-multi-queue" disabled>Stop Queue</button>
+            <button class="button" id="refresh-tabs">Refresh Tab List</button>
+        </div>
+
+        <!-- History Tab -->
+        <div class="tab-content" id="history">
+            <div class="history-controls">
+                <button class="button" id="load-history">Load History</button>
+                <button class="button danger" id="clear-history">Clear History</button>
+                <button class="button" id="export-history">Export History</button>
+            </div>
+
+            <div class="history-list" id="history-list">
+                <div class="empty-state">
+                    <p>No conversation history</p>
+                    <p>Complete some prompts to see them here</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="popup.js"></script>
+</body>
+</html> 

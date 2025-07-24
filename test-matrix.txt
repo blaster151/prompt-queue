@@ -1,0 +1,6 @@
+Header1	Header2	Header3	Header4
+What is the capital of France?	Please provide a brief answer	Include population data	Make it interesting
+How do I make coffee?	Step by step instructions	Include brewing time	Add tips for beginners
+What is machine learning?	Simple explanation	Include examples	Mention applications
+Explain photosynthesis	Basic process	Include chemical equation	Add fun facts
+What is the speed of light?	Exact value	Include units	Compare to other speeds 

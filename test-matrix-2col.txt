@@ -1,0 +1,6 @@
+Question	Answer
+What is the capital of France?	Paris
+How do you make coffee?	Grind beans, add hot water
+What is machine learning?	AI that learns from data
+Explain photosynthesis	Process plants use to make food
+What is the speed of light?	299,792,458 meters per second 

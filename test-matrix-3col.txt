@@ -1,0 +1,6 @@
+Topic	Question	Context
+Geography	What is the capital of France?	European country
+Cooking	How do you make coffee?	Beverage preparation
+Technology	What is machine learning?	Artificial intelligence
+Science	Explain photosynthesis	Plant biology
+Physics	What is the speed of light?	Light and energy 
