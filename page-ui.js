@@ -24,7 +24,7 @@
       <div class="pq-content" id="pq-content" style="display: none;">
         <div class="pq-tabs">
           <button class="pq-tab active" data-tab="manual">Manual</button>
-          <button class="pq-tab" data-tab="matrix">Matrix</button>
+          <button class="pq-tab" data-tab="matrix">List</button>
           <button class="pq-tab" data-tab="queue">Queue</button>
           <button class="pq-tab" data-tab="multi">Multi-Tab</button>
           <button class="pq-tab" data-tab="history">History</button>
@@ -39,11 +39,11 @@
           </div>
         </div>
 
-        <!-- Matrix Tab -->
+        <!-- List Tab -->
         <div class="pq-tab-content" id="matrix">
           <div class="pq-input-group">
-            <label>Matrix Data:</label>
-            <textarea id="pq-matrix-input" placeholder="Paste tab-separated matrix data..."></textarea>
+            <label>List Data:</label>
+            <textarea id="pq-matrix-input" placeholder="Paste your data here...&#10;&#10;• One prompt per line&#10;• Multi-column data will be concatenated"></textarea>
             <button class="pq-button primary" id="pq-parse-matrix">Parse & Add</button>
           </div>
         </div>
@@ -66,7 +66,7 @@
           <div class="pq-queue-list" id="pq-queue-list">
             <div class="pq-empty-state">
               <p>No prompts in queue</p>
-              <p>Add prompts from Manual or Matrix tabs</p>
+              <p>Add prompts from Manual or List tabs</p>
             </div>
           </div>
 
@@ -713,60 +713,48 @@
     }
   }
 
-  // Matrix parsing logic (same as popup)
+  // List parsing logic (same as popup)
   function parseMatrixLocal(input) {
     const cleanInput = input.trim();
-    const lines = cleanInput.split(/\r?\n/);
+    if (!cleanInput) return [];
+    
+    const lines = cleanInput.split(/\r?\n/).filter(line => line.trim());
     if (lines.length === 0) return [];
 
-    const firstDataRow = lines[1];
-    if (!firstDataRow) return [];
+    // Check if first line looks like headers (contains common header words)
+    const headerWords = ['name', 'title', 'prompt', 'question', 'task', 'column', 'field', 'header'];
+    const firstLine = lines[0].toLowerCase();
+    const looksLikeHeader = headerWords.some(word => firstLine.includes(word)) && lines.length > 1;
+    
+    // Start from first data row (skip header if detected)
+    const startIndex = looksLikeHeader ? 1 : 0;
+    const dataLines = lines.slice(startIndex);
+    
+    console.log(`📊 Processing ${dataLines.length} data rows (header ${looksLikeHeader ? 'detected and ' : ''}skipped)`);
 
-    const columnCount = firstDataRow.split("\t").length;
-    console.log(`📊 Detected ${columnCount} columns in matrix`);
-
-    if (columnCount < 2 || columnCount > 4) {
-      console.warn(`⚠️ Unsupported column count: ${columnCount}. Expected 2-4 columns.`);
-      return [];
-    }
-
-    const rows = [];
-    let buffer = "";
-
-    const flushIfComplete = () => {
-      const tabCount = buffer.split("\t").length;
-      if (tabCount === columnCount) {
-        rows.push(buffer);
-        buffer = "";
-      }
-    };
-
-    for (const line of lines.slice(1)) {
-      if (line.trim() === '') continue;
+    const prompts = [];
+    
+    for (const line of dataLines) {
+      if (!line.trim()) continue;
       
-      if (!buffer) {
-        buffer = line;
+      // Check if line contains tabs (multi-column)
+      if (line.includes('\t')) {
+        // Multi-column: concatenate all columns with spaces
+        const columns = line.split('\t')
+          .map(cell => cell.trim())
+          .filter(cell => cell); // Remove empty columns
+        
+        if (columns.length > 0) {
+          prompts.push(columns.join(' '));
+        }
       } else {
-        buffer += "\n" + line;
+        // Single column: use the line as-is
+        prompts.push(line.trim());
       }
-      flushIfComplete();
     }
 
-    if (buffer.trim()) {
-      const tabCount = buffer.split("\t").length;
-      if (tabCount === columnCount) {
-        rows.push(buffer);
-      } else {
-        console.warn("⚠️ Incomplete row discarded:", buffer);
-      }
-    }
-
-    return rows.map(row =>
-      row
-        .split("\t")
-        .map(cell => cell.replace(/\r?\n/g, " ").trim())
-        .join("  ")
-    );
+    console.log(`✅ Parsed ${prompts.length} prompts from list data`);
+    return prompts;
   }
 
   // Start queue
@@ -786,46 +774,31 @@
         // Initialize progress bar
         updateProgressBar(container, 0, queue.length);
 
-        // Call content script function directly since we're in the same context
-        if (window.localQueue) {
-          console.warn('Queue already running, stopping first');
-          window.localQueue = null;
-          window.localQueueIndex = 0;
-        }
-        
-        // Set up the queue for the content script
-        window.localQueue = [...queue];
-        window.localQueueIndex = 0;
-        
-        // Set the content script as active
-        if (window.setActive) {
-          window.setActive(true);
-          console.log('Content script set to active');
-        }
-        
-        // Start processing with retry mechanism
-        console.log('Checking content script availability...');
-        console.log('window.runPromptQueuerSingleTab:', window.runPromptQueuerSingleTab);
-        console.log('window.localQueue:', window.localQueue);
-        
-        let retryCount = 0;
-        const maxRetries = 10;
-        
-        const startProcessing = () => {
-          if (window.runPromptQueuerSingleTab) {
-            console.log('Starting content script queue processing...');
-            window.runPromptQueuerSingleTab();
-          } else if (retryCount < maxRetries) {
-            retryCount++;
-            console.log(`Content script not ready, retrying... (${retryCount}/${maxRetries})`);
-            setTimeout(startProcessing, 500);
+        // Delegate to content script via message passing
+        try {
+          const response = await chrome.runtime.sendMessage({
+            type: 'START_SINGLE_TAB_QUEUE',
+            messages: queue
+          });
+          
+          if (response && response.success) {
+            console.log('✅ Single tab queue started via content script');
           } else {
-            console.error('Content script function not available after retries');
-            throw new Error('Content script not ready - function not found after retries');
+            throw new Error(response?.error || 'Failed to start single tab queue');
           }
-        };
-        
-        startProcessing();
+        } catch (error) {
+          console.error('❌ Failed to start queue via content script, trying direct method:', error);
+          
+          // Fallback: try direct content script access
+          if (window.runPromptQueuerSingleTab) {
+            window.localQueue = [...queue];
+            window.localQueueIndex = 0;
+            if (window.setActive) window.setActive(true);
+            window.runPromptQueuerSingleTab();
+          } else {
+            throw new Error('Content script not available');
+          }
+        }
         
         console.log('Content script queue started');
       }
@@ -1099,7 +1072,7 @@
       queueList.innerHTML = `
         <div class="pq-empty-state">
           <p>No prompts in queue</p>
-          <p>Add prompts from Manual or Matrix tabs</p>
+          <p>Add prompts from Manual or List tabs</p>
         </div>
       `;
     } else {

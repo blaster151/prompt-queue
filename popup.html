@@ -596,7 +596,7 @@
         <div class="tab-container">
             <div class="tabs">
                 <button class="tab active" data-tab="manual">Manual</button>
-                <button class="tab" data-tab="matrix">Matrix</button>
+                <button class="tab" data-tab="matrix">List</button>
                 <button class="tab" data-tab="queue">Queue</button>
                 <button class="tab" data-tab="multi">Multi-Tab</button>
                 <button class="tab" data-tab="history">History</button>
@@ -612,13 +612,13 @@
             <button class="button primary" id="add-single">Add to Queue</button>
         </div>
 
-        <!-- Matrix Tab -->
+        <!-- List Tab -->
         <div class="tab-content" id="matrix">
             <div class="input-group">
-                <label for="matrix-input">Paste Matrix Data:</label>
-                <textarea id="matrix-input" placeholder="Paste your tab-separated matrix data here...&#10;Format: Column1&#9;Column2&#9;Column3&#9;Column4&#10;Supports 2-4 columns"></textarea>
+                <label for="matrix-input">Paste List Data:</label>
+                <textarea id="matrix-input" placeholder="Paste your data here...&#10;&#10;Supports:&#10;• Single column (one prompt per line)&#10;• Multi-column tab-separated data&#10;• Each row becomes one prompt"></textarea>
                 <div class="help-text">
-                    Expected format: 2-4 columns separated by tabs. First row is header and will be skipped.
+                    Each row becomes a prompt. Multi-column rows will be concatenated with spaces. First row is treated as header and skipped if it looks like headers.
                 </div>
             </div>
             <button class="button primary" id="parse-matrix">Parse & Add to Queue</button>
@@ -642,7 +642,7 @@
             <div class="queue-list" id="queue-list">
                 <div class="empty-state">
                     <p>No prompts in queue</p>
-                    <p>Add prompts from Manual or Matrix tabs</p>
+                    <p>Add prompts from Manual or List tabs</p>
                 </div>
             </div>
 
