@@ -219,60 +219,45 @@ class PromptQueuer {
     parseMatrixLocal(input) {
         // Remove trailing whitespace and newlines that could cause issues
         const cleanInput = input.trim();
-        const lines = cleanInput.split(/\r?\n/);
+        if (!cleanInput) return [];
+        
+        const lines = cleanInput.split(/\r?\n/).filter(line => line.trim());
         if (lines.length === 0) return [];
 
-        // Detect column count from first data row (skip header)
-        const firstDataRow = lines[1];
-        if (!firstDataRow) return [];
+        // Check if first line looks like headers (contains common header words)
+        const headerWords = ['name', 'title', 'prompt', 'question', 'task', 'column', 'field', 'header'];
+        const firstLine = lines[0].toLowerCase();
+        const looksLikeHeader = headerWords.some(word => firstLine.includes(word)) && lines.length > 1;
+        
+        // Start from first data row (skip header if detected)
+        const startIndex = looksLikeHeader ? 1 : 0;
+        const dataLines = lines.slice(startIndex);
+        
+        console.log(`📊 Processing ${dataLines.length} data rows (header ${looksLikeHeader ? 'detected and ' : ''}skipped)`);
 
-        const columnCount = firstDataRow.split("\t").length;
-        console.log(`📊 Detected ${columnCount} columns in matrix`);
-
-        // Validate column count (2-4 columns supported)
-        if (columnCount < 2 || columnCount > 4) {
-            console.warn(`⚠️ Unsupported column count: ${columnCount}. Expected 2-4 columns.`);
-            return [];
-        }
-
-        const rows = [];
-        let buffer = "";
-
-        const flushIfComplete = () => {
-            const tabCount = buffer.split("\t").length;
-            if (tabCount === columnCount) {
-                rows.push(buffer);
-                buffer = "";
-            }
-        };
-
-        for (const line of lines.slice(1)) { // skip header
-            // Skip empty lines
-            if (line.trim() === '') continue;
+        const prompts = [];
+        
+        for (const line of dataLines) {
+            if (!line.trim()) continue;
             
-            if (!buffer) {
-                buffer = line;
+            // Check if line contains tabs (multi-column)
+            if (line.includes('\t')) {
+                // Multi-column: concatenate all columns with spaces
+                const columns = line.split('\t')
+                    .map(cell => cell.trim())
+                    .filter(cell => cell); // Remove empty columns
+                
+                if (columns.length > 0) {
+                    prompts.push(columns.join(' '));
+                }
             } else {
-                buffer += "\n" + line;
+                // Single column: use the line as-is
+                prompts.push(line.trim());
             }
-            flushIfComplete();
         }
 
-        if (buffer.trim()) {
-            const tabCount = buffer.split("\t").length;
-            if (tabCount === columnCount) {
-                rows.push(buffer);
-            } else {
-                console.warn("⚠️ Incomplete row discarded:", buffer);
-            }
-        }
-
-        return rows.map(row =>
-            row
-                .split("\t")
-                .map(cell => cell.replace(/\r?\n/g, " ").trim())
-                .join("  ")
-        );
+        console.log(`✅ Parsed ${prompts.length} prompts from list data`);
+        return prompts;
     }
 
         async startQueue() {
@@ -327,27 +312,48 @@ class PromptQueuer {
         }
 
         try {
-            const response = await chrome.runtime.sendMessage({
-                type: 'START_MULTI_TAB_QUEUE',
-                messages: this.queue
-            });
+            const response = await Promise.race([
+                chrome.runtime.sendMessage({
+                    type: 'START_MULTI_TAB_QUEUE',
+                    messages: this.queue
+                }),
+                new Promise((_, reject) => 
+                    setTimeout(() => reject(new Error('Request timeout')), 10000)
+                )
+            ]);
 
-            if (response.success) {
+            if (response && response.success) {
                 this.isProcessing = true;
                 this.saveQueue(); // Broadcast processing state to other popups
                 this.updateUI();
                 this.showMultiProgress();
                 console.log(`Started multi-tab queue with ${response.activeTabs} tabs`);
             } else {
-                if (response.error && response.error.includes('No active ChatGPT tabs')) {
+                const errorMsg = response?.error || 'Unknown error occurred';
+                if (errorMsg.includes('No active ChatGPT tabs')) {
                     alert('No ChatGPT tabs found. Please open ChatGPT in one or more tabs to use multi-tab mode.');
                 } else {
-                    alert(response.error || 'Failed to start multi-tab queue');
+                    alert(`Failed to start multi-tab queue: ${errorMsg}`);
                 }
             }
         } catch (error) {
             console.error('Error starting multi-tab queue:', error);
-            alert('Error starting multi-tab queue');
+            
+            // Provide specific error messages
+            let userMessage = 'Error starting multi-tab queue';
+            if (error.message === 'Request timeout') {
+                userMessage = 'Request timed out. Please try again.';
+            } else if (error.message?.includes('Extension context invalidated')) {
+                userMessage = 'Extension was reloaded. Please refresh the page and try again.';
+            } else if (error.message?.includes('receiving end does not exist')) {
+                userMessage = 'Communication error. Please refresh the ChatGPT page and try again.';
+            }
+            
+            alert(userMessage);
+            
+            // Reset state on error
+            this.isProcessing = false;
+            this.updateUI();
         }
     }
 
@@ -709,13 +715,29 @@ class PromptQueuer {
 
     async loadQueue() {
         try {
-            const result = await chrome.storage.local.get(['queue']);
+            const result = await Promise.race([
+                chrome.storage.local.get(['queue']),
+                new Promise((_, reject) => 
+                    setTimeout(() => reject(new Error('Storage timeout')), 5000)
+                )
+            ]);
             this.queue = result.queue || [];
             console.log('Loaded queue:', this.queue);
-            console.log('Storage result:', result);
         } catch (error) {
             console.error('Error loading queue:', error);
             this.queue = [];
+            
+            // Try to recover from storage corruption
+            if (error.message?.includes('Storage timeout')) {
+                console.warn('Storage access timed out, using empty queue');
+            } else {
+                console.warn('Storage may be corrupted, clearing and starting fresh');
+                try {
+                    await chrome.storage.local.remove(['queue']);
+                } catch (clearError) {
+                    console.error('Failed to clear corrupted storage:', clearError);
+                }
+            }
         }
     }
 

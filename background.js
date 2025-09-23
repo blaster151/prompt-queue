@@ -20,12 +20,24 @@ class MultiTabManager {
       this.handleMessage(message, sender, sendResponse);
       return true; // Keep message channel open for async responses
     });
+
+    // Listen for tab removal events
+    chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
+      this.handleTabRemoved(tabId);
+    });
+
+    // Listen for tab updates to detect navigation away from ChatGPT
+    chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+      if (changeInfo.url) {
+        this.handleTabUrlChange(tabId, changeInfo.url);
+      }
+    });
   }
 
   handleMessage(message, sender, sendResponse) {
     switch (message.type) {
       case 'REGISTER_TAB':
-        this.registerTab(message.tabId, message.url);
+        this.registerTab(message.tabId, message.url, sender.tab?.id);
         sendResponse({ success: true });
         break;
 
@@ -80,23 +92,41 @@ class MultiTabManager {
       case 'PROGRESS_UPDATE':
         chrome.runtime.sendMessage(message);
         break;
+
+      case 'START_SINGLE_TAB_QUEUE':
+        this.handleStartSingleTabQueue(message.messages, sendResponse);
+        break;
     }
   }
 
-  registerTab(tabId, url) {
+  registerTab(tabId, url, chromeTabId = null) {
     const isChatGPT = url.includes('chat.openai.com') || 
                      url.includes('chatgpt.com') ||
                      url.includes('chat.openai.com/c/') ||
                      url.includes('chatgpt.com/c/');
     
     if (isChatGPT) {
+      // Check for tab ID collision
+      if (this.tabs.has(tabId)) {
+        console.warn(`⚠️ Tab ID collision detected: ${tabId}. Existing tab will be replaced.`);
+        // Clean up the existing tab's state
+        const existingTab = this.tabs.get(tabId);
+        if (existingTab && existingTab.isActive) {
+          console.log(`🔄 Deactivating existing tab with same ID: ${tabId}`);
+          existingTab.isActive = false;
+          existingTab.currentPrompt = null;
+        }
+      }
+      
       this.tabs.set(tabId, {
         tabId: tabId,
+        chromeTabId: chromeTabId,
         url: url,
         isActive: false,
         isVisible: true,
         currentPrompt: null,
-        registeredAt: Date.now()
+        registeredAt: Date.now(),
+        lastActivity: Date.now()
       });
       console.log(`📝 Registered ChatGPT tab: ${tabId} (${url})`);
     }
@@ -106,6 +136,7 @@ class MultiTabManager {
     const tab = this.tabs.get(tabId);
     if (tab) {
       tab.isVisible = isVisible;
+      tab.lastActivity = Date.now();
     }
   }
 
@@ -125,6 +156,7 @@ class MultiTabManager {
       tab.isActive = true;
       tab.currentPrompt = prompt;
       tab.currentPromptIndex = promptIndex;
+      tab.lastActivity = Date.now();
     }
 
     console.log(`📤 [Tab ${tabId}] Assigned prompt ${promptIndex + 1}/${this.queue.length}: "${prompt}"`);
@@ -154,31 +186,89 @@ class MultiTabManager {
   }
 
   storePromptResponse(prompt, response) {
+    // Validate and truncate content if necessary
+    const maxPromptLength = 10000; // 10KB
+    const maxResponseLength = 50000; // 50KB
+    
+    const truncatedPrompt = prompt && prompt.length > maxPromptLength 
+      ? prompt.substring(0, maxPromptLength) + '... [truncated]'
+      : prompt;
+      
+    const truncatedResponse = response && response.length > maxResponseLength
+      ? response.substring(0, maxResponseLength) + '... [truncated]'
+      : response;
+    
     const conversation = {
-      prompt: prompt,
-      response: response,
+      prompt: truncatedPrompt,
+      response: truncatedResponse,
       timestamp: Date.now(),
       tabId: Array.from(this.tabs.keys())[0] || 'unknown'
     };
     
-    console.log(`💾 Storing conversation: "${prompt.substring(0, 50)}..." with response length: ${response ? response.length : 0}`);
+    // Estimate size in bytes (rough approximation)
+    const conversationSize = JSON.stringify(conversation).length * 2; // UTF-16 approximation
+    
+    console.log(`💾 Storing conversation: "${truncatedPrompt?.substring(0, 50)}..." (${conversationSize} bytes)`);
     
     // Get existing conversations
     chrome.storage.local.get(['conversations'], (result) => {
       const conversations = result.conversations || [];
+      
+      // Calculate total size
+      const totalSize = conversations.reduce((size, conv) => 
+        size + JSON.stringify(conv).length * 2, 0
+      ) + conversationSize;
+      
+      // Chrome storage quota is ~5MB per extension
+      const maxStorageSize = 4 * 1024 * 1024; // 4MB to be safe
+      
+      // Remove old conversations if we're approaching the limit
+      let currentSize = totalSize;
+      while (currentSize > maxStorageSize && conversations.length > 0) {
+        const removedConv = conversations.shift();
+        console.log(`🗑️ Removed old conversation to free space: "${removedConv.prompt?.substring(0, 30)}..."`);
+        
+        // Recalculate size after removal
+        currentSize = conversations.reduce((size, conv) => 
+          size + JSON.stringify(conv).length * 2, 0
+        ) + conversationSize;
+      }
+      
+      // Also enforce maximum count limit
+      if (conversations.length >= 100) {
+        conversations.splice(0, conversations.length - 99);
+      }
+      
       conversations.push(conversation);
       
-      // Keep only last 100 conversations to prevent storage bloat
-      if (conversations.length > 100) {
-        conversations.splice(0, conversations.length - 100);
+      // Final size check
+      const finalSize = conversations.reduce((size, conv) => 
+        size + JSON.stringify(conv).length * 2, 0
+      );
+      
+      if (finalSize > maxStorageSize) {
+        console.warn(`⚠️ Storage size still too large (${finalSize} bytes), storing anyway but may fail`);
       }
       
       // Save back to storage
       chrome.storage.local.set({ conversations: conversations }, () => {
         if (chrome.runtime.lastError) {
           console.error('❌ Error storing conversation:', chrome.runtime.lastError);
+          
+          // If storage failed due to quota, try removing more conversations
+          if (chrome.runtime.lastError.message?.includes('quota')) {
+            console.log('🧹 Storage quota exceeded, attempting emergency cleanup...');
+            const reducedConversations = conversations.slice(-20); // Keep only last 20
+            chrome.storage.local.set({ conversations: reducedConversations }, () => {
+              if (chrome.runtime.lastError) {
+                console.error('❌ Emergency cleanup also failed:', chrome.runtime.lastError);
+              } else {
+                console.log(`✅ Emergency cleanup successful. Reduced to ${reducedConversations.length} conversations`);
+              }
+            });
+          }
         } else {
-          console.log(`✅ Conversation stored successfully. Total conversations: ${conversations.length}`);
+          console.log(`✅ Conversation stored successfully. Total: ${conversations.length} conversations (${finalSize} bytes)`);
         }
       });
     });
@@ -281,6 +371,35 @@ class MultiTabManager {
     sendResponse({ success: true });
   }
 
+  async handleStartSingleTabQueue(messages, sendResponse) {
+    // Find the first available ChatGPT tab
+    const availableTabs = Array.from(this.tabs.values()).filter(tab => {
+      const isChatGPT = tab.url.includes('chat.openai.com') || 
+                       tab.url.includes('chatgpt.com') ||
+                       tab.url.includes('chat.openai.com/c/') ||
+                       tab.url.includes('chatgpt.com/c/');
+      return isChatGPT && tab.isVisible && tab.chromeTabId;
+    });
+
+    if (availableTabs.length === 0) {
+      sendResponse({ success: false, error: 'No available ChatGPT tabs found' });
+      return;
+    }
+
+    const targetTab = availableTabs[0];
+    
+    try {
+      const response = await chrome.tabs.sendMessage(targetTab.chromeTabId, {
+        type: 'START_SINGLE_TAB_QUEUE',
+        messages: messages
+      });
+      sendResponse(response);
+    } catch (error) {
+      console.error('Failed to start single tab queue:', error);
+      sendResponse({ success: false, error: error.message });
+    }
+  }
+
   onQueueComplete() {
     this.isProcessing = false;
     console.log('🎉 Multi-tab queue completed!');
@@ -293,13 +412,68 @@ class MultiTabManager {
     });
   }
 
+  // Handle tab removal
+  handleTabRemoved(chromeTabId) {
+    // Find and remove any tabs with this Chrome tab ID
+    const toRemove = [];
+    for (const [tabId, tab] of this.tabs.entries()) {
+      // Try to match by Chrome tab ID if available, or by other criteria
+      if (tab.chromeTabId === chromeTabId) {
+        toRemove.push(tabId);
+      }
+    }
+    
+    for (const tabId of toRemove) {
+      console.log(`🗑️ Cleaning up removed tab: ${tabId}`);
+      this.tabs.delete(tabId);
+    }
+  }
+
+  // Handle tab URL changes
+  handleTabUrlChange(chromeTabId, newUrl) {
+    const isChatGPT = newUrl.includes('chat.openai.com') || 
+                     newUrl.includes('chatgpt.com') ||
+                     newUrl.includes('chat.openai.com/c/') ||
+                     newUrl.includes('chatgpt.com/c/');
+    
+    // If navigated away from ChatGPT, clean up the tab
+    if (!isChatGPT) {
+      const toRemove = [];
+      for (const [tabId, tab] of this.tabs.entries()) {
+        if (tab.chromeTabId === chromeTabId) {
+          toRemove.push(tabId);
+        }
+      }
+      
+      for (const tabId of toRemove) {
+        console.log(`🚫 Cleaning up tab that navigated away from ChatGPT: ${tabId}`);
+        this.tabs.delete(tabId);
+      }
+    }
+  }
+
   // Clean up tabs that are no longer active
   cleanupInactiveTabs() {
     const now = Date.now();
+    const toRemove = [];
+    
     for (const [tabId, tab] of this.tabs.entries()) {
-      if (now - tab.registeredAt > 300000) { // 5 minutes
-        this.tabs.delete(tabId);
+      // More aggressive cleanup: remove tabs older than 5 minutes OR inactive for 2 minutes
+      const isOld = now - tab.registeredAt > 300000; // 5 minutes
+      const isInactive = !tab.isActive && now - (tab.lastActivity || tab.registeredAt) > 120000; // 2 minutes
+      
+      if (isOld || isInactive) {
+        toRemove.push(tabId);
       }
+    }
+    
+    for (const tabId of toRemove) {
+      console.log(`🧹 Cleaning up inactive tab: ${tabId}`);
+      this.tabs.delete(tabId);
+    }
+    
+    if (toRemove.length > 0) {
+      console.log(`🧹 Cleaned up ${toRemove.length} inactive tabs. ${this.tabs.size} tabs remaining.`);
     }
   }
 }
