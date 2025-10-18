@@ -53,43 +53,68 @@
   };
 
   const getSendButton = () => {
+    // Helper to check if button might be a navigation/back button
+    const isLikelyNavigationButton = (btn) => {
+      const text = btn.textContent?.toLowerCase() || '';
+      const ariaLabel = btn.getAttribute('aria-label')?.toLowerCase() || '';
+      const className = btn.className?.toLowerCase() || '';
+      
+      // Reject buttons with navigation-related text
+      const navKeywords = ['back', 'close', 'cancel', 'exit', 'return', 'navigate', 'leave'];
+      return navKeywords.some(keyword => 
+        text.includes(keyword) || ariaLabel.includes(keyword) || className.includes(keyword)
+      );
+    };
+    
     // Try multiple strategies to find the send button
     const strategies = [
-      // Strategy 1: Look for specific SVG path (current ChatGPT)
-      () => Array.from(document.querySelectorAll('button'))
-        .find(btn => btn.querySelector('svg path[d*="M10.5 4.5l7 7-7 7"]')),
-      
-      // Strategy 2: Look for data-testid
+      // Strategy 1: Look for data-testid (most reliable)
       () => document.querySelector('button[data-testid="send-button"]'),
+      
+      // Strategy 2: Look for specific SVG path (current ChatGPT)
+      () => Array.from(document.querySelectorAll('button'))
+        .find(btn => {
+          if (isLikelyNavigationButton(btn)) return false;
+          return btn.querySelector('svg path[d*="M10.5 4.5l7 7-7 7"]');
+        }),
       
       // Strategy 3: Look for common send button patterns
       () => Array.from(document.querySelectorAll('button'))
         .find(btn => {
+          if (isLikelyNavigationButton(btn)) return false;
           const text = btn.textContent?.toLowerCase() || '';
           const ariaLabel = btn.getAttribute('aria-label')?.toLowerCase() || '';
           return text.includes('send') || ariaLabel.includes('send') || 
                  text.includes('submit') || ariaLabel.includes('submit');
         }),
       
-      // Strategy 4: Look for buttons with send-like icons
+      // Strategy 4: Look for buttons with send-like icons (arrow pointing right/up)
       () => Array.from(document.querySelectorAll('button'))
         .find(btn => {
+          if (isLikelyNavigationButton(btn)) return false;
           const svg = btn.querySelector('svg');
           if (!svg) return false;
           const paths = svg.querySelectorAll('path');
           return Array.from(paths).some(path => {
             const d = path.getAttribute('d') || '';
-            return d.includes('M') && d.includes('L') && d.length > 20; // Likely an arrow/send icon
+            // More specific: must be a reasonably long path (icon) and not too complex
+            return d.includes('M') && d.includes('L') && d.length > 20 && d.length < 200;
           });
         }),
       
-      // Strategy 5: Look for button near input that's not disabled
+      // Strategy 5: Look for button near input (LAST RESORT - most dangerous)
       () => {
         const input = getInput();
         if (!input) return null;
         const container = input.closest('form') || input.parentElement;
         if (!container) return null;
-        return container.querySelector('button:not([disabled])');
+        
+        // Get all buttons in container
+        const buttons = Array.from(container.querySelectorAll('button:not([disabled])'));
+        
+        // Filter out navigation buttons and prefer the last button (usually send)
+        const safeButtons = buttons.filter(btn => !isLikelyNavigationButton(btn));
+        return safeButtons[safeButtons.length - 1]; // Return last button in DOM order
       }
     ];
     
@@ -97,6 +122,7 @@
       try {
         const button = strategy();
         if (button && !button.disabled && button.offsetParent !== null) {
+          console.log(`🎯 Found send button via strategy: ${button.getAttribute('aria-label') || button.textContent || 'unnamed button'}`);
           return button;
         }
       } catch (e) {
@@ -179,56 +205,114 @@
   };
 
   const isResponseComplete = () => {
+    // CRITICAL: If stop button is visible, response is definitely in progress
+    // This is a hard requirement that overrides all other checks
+    const stopButtonVisible = isVisible('[data-testid="stop-button"]');
+    
+    if (stopButtonVisible) {
+      if (window.debugPromptQueuer) {
+        console.log('🛑 Stop button visible - response still in progress');
+      }
+      return false;
+    }
+    
     // Try multiple strategies to detect if response is complete
     const strategies = [
-      // Strategy 1: Look for stop button (response in progress)
-      () => !isVisible('[data-testid="stop-button"]'),
-      
-      // Strategy 2: Look for send button (response complete)
-      () => isVisible('[data-testid="send-button"]') || getSendButton() !== null,
-      
-      // Strategy 3: Look for mic button (response complete)
-      () => isVisible('[data-testid="composer-speech-button"]'),
-      
-      // Strategy 4: Check if any loading indicators are gone
-      () => !document.querySelector('.loading, .spinner, [data-loading="true"]'),
-      
-      // Strategy 5: Check if input is enabled
-      () => {
-        const input = getInput();
-        return input && !input.disabled && !input.readOnly;
+      { 
+        name: 'Send button visible',
+        check: () => isVisible('[data-testid="send-button"]') || getSendButton() !== null
+      },
+      { 
+        name: 'Mic button visible',
+        check: () => isVisible('[data-testid="composer-speech-button"]')
+      },
+      { 
+        name: 'No loading indicators',
+        check: () => !document.querySelector('.loading, .spinner, [data-loading="true"]')
+      },
+      { 
+        name: 'Input enabled',
+        check: () => {
+          const input = getInput();
+          return input && !input.disabled && !input.readOnly;
+        }
       }
     ];
     
-    // Response is complete if any strategy indicates completion
+    // Count how many strategies indicate completion
+    let completionIndicators = 0;
+    const results = ['No stop button: ✓']; // Already verified above
+    
     for (const strategy of strategies) {
       try {
-        if (strategy()) return true;
+        const result = strategy.check();
+        results.push(`${strategy.name}: ${result ? '✓' : '✗'}`);
+        if (result) completionIndicators++;
       } catch (e) {
-        console.warn('Response completion strategy failed:', e);
+        console.warn(`Response completion strategy '${strategy.name}' failed:`, e);
+        results.push(`${strategy.name}: ERROR`);
       }
     }
     
-    return false;
+    // Require at least 3 out of 4 secondary strategies to agree
+    // (Stop button already verified, so we check the remaining 4)
+    const isComplete = completionIndicators >= 3;
+    
+    // Log detailed strategy results for debugging
+    if (window.debugPromptQueuer) {
+      console.log(`🔍 Completion check: ${completionIndicators}/4 secondary strategies agree | ${results.join(', ')}`);
+    }
+    
+    if (isComplete) {
+      // Additional check: ensure the last response has actual content
+      const lastResponse = getLastResponse();
+      if (lastResponse) {
+        const content = lastResponse.textContent?.trim() || '';
+        // If there's a response but it's empty or very short, it might not be done yet
+        if (content.length < 5) {
+          console.log(`⚠️ Response element exists but content too short (${content.length} chars), waiting...`);
+          return false;
+        }
+      }
+      
+      console.log(`✅ Response completion confirmed: ${completionIndicators}/4 secondary strategies agree | ${results.join(', ')}`);
+    }
+    
+    return isComplete;
   };
 
   const waitForResponseToFinish = async () => {
     console.log("⏳ Waiting for assistant to finish…");
 
     return new Promise((resolve) => {
-      // Check immediately first
+      let checkCount = 0;
+      const startTime = Date.now();
+      
       const checkCompletion = () => {
+        checkCount++;
+        const elapsedMs = Date.now() - startTime;
+        
+        // Don't check completion for at least 500ms to ensure response has started
+        if (elapsedMs < 500) {
+          console.log(`⏳ Waiting for response to start... (${elapsedMs}ms elapsed)`);
+          return false;
+        }
+        
         if (isResponseComplete()) {
-          console.log("✅ Assistant response is complete.");
+          console.log(`✅ Assistant response is complete. (${checkCount} checks, ${elapsedMs}ms elapsed)`);
           resolve();
           return true;
         }
+        
+        // Log progress every 5 seconds
+        if (checkCount % 50 === 0) {
+          console.log(`⏳ Still waiting for response... (${elapsedMs}ms elapsed, ${checkCount} checks)`);
+        }
+        
         return false;
       };
 
-      // Check immediately
-      if (checkCompletion()) return;
-
+      // Don't check immediately - wait a bit for response to start
       // Then check every 100ms
       const interval = setInterval(() => {
         if (checkCompletion()) {
@@ -236,17 +320,101 @@
         }
       }, 100);
 
-      // Timeout after 30 seconds
+      // Timeout after 5 minutes - but ONLY if stop button is not visible
+      // NEVER assume response is done if stop button is still visible
       setTimeout(() => {
-        clearInterval(interval);
-        console.warn("⏰ Timeout: assuming response is done.");
-        resolve();
-      }, 30000);
+        const elapsedMs = Date.now() - startTime;
+        const stopButtonStillVisible = isVisible('[data-testid="stop-button"]');
+        
+        if (stopButtonStillVisible) {
+          console.warn(`⏰ Timeout reached after ${elapsedMs}ms, but stop button still visible - continuing to wait...`);
+          // Keep checking - don't clear the interval
+        } else {
+          clearInterval(interval);
+          console.warn(`⏰ Timeout after ${elapsedMs}ms and stop button not visible - assuming response is done.`);
+          resolve();
+        }
+      }, 300000); // 5 minutes timeout
     });
   };
 
-  const sendMessage = async (text) => {
-    console.log(`📝 Attempting to send message: "${text.substring(0, 50)}..."`);
+  const uploadAttachments = async (attachments) => {
+    if (!attachments || attachments.length === 0) return;
+    
+    console.log(`📎 Uploading ${attachments.length} attachment(s)...`);
+    
+    for (const attachment of attachments) {
+      try {
+        // Convert base64 data URL to File object
+        const response = await fetch(attachment.data);
+        const blob = await response.blob();
+        const file = new File([blob], attachment.name, { type: attachment.mimeType });
+        
+        // Find the file input or drop zone
+        const fileInput = document.querySelector('input[type="file"]');
+        
+        if (fileInput) {
+          // Create a DataTransfer to simulate file selection
+          const dataTransfer = new DataTransfer();
+          dataTransfer.items.add(file);
+          fileInput.files = dataTransfer.files;
+          
+          // Trigger change event
+          fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+          
+          console.log(`✅ Uploaded attachment: ${attachment.name}`);
+        } else {
+          // Try drag-drop simulation
+          const dropZone = document.querySelector('[data-testid="composer-dropzone"]') || 
+                          document.querySelector('[role="textbox"]')?.closest('form');
+          
+          if (dropZone) {
+            const dataTransfer = new DataTransfer();
+            dataTransfer.items.add(file);
+            
+            // Simulate drag events
+            const dragEvent = new DragEvent('drop', {
+              bubbles: true,
+              cancelable: true,
+              dataTransfer: dataTransfer
+            });
+            
+            dropZone.dispatchEvent(dragEvent);
+            console.log(`✅ Dropped attachment: ${attachment.name}`);
+          } else {
+            console.warn(`⚠️ Could not find file upload mechanism for ${attachment.name}`);
+          }
+        }
+        
+        // Wait for upload to process
+        await delay(500);
+      } catch (error) {
+        console.error(`❌ Error uploading attachment ${attachment.name}:`, error);
+      }
+    }
+    
+    // Wait a bit more for all uploads to complete
+    await delay(1000);
+  };
+
+  const sendMessage = async (messageOrText, attachments = []) => {
+    // Handle both string and object formats
+    const text = typeof messageOrText === 'string' ? messageOrText : messageOrText.text;
+    const atts = typeof messageOrText === 'string' ? attachments : (messageOrText.attachments || []);
+    
+    console.log(`📝 Attempting to send message: "${text.substring(0, 50)}..." with ${atts.length} attachment(s)`);
+    
+    // SAFETY CHECK: Don't send if a response is currently in progress
+    const stopButtonVisible = isVisible('[data-testid="stop-button"]');
+    if (stopButtonVisible) {
+      console.error("❌ SAFETY: Cannot send message - stop button is visible (response in progress)");
+      throw new Error("Cannot send message while response is in progress");
+    }
+    
+    // Upload attachments first if any
+    if (atts.length > 0) {
+      await uploadAttachments(atts);
+    }
     
     const input = getInput();
     if (!input) {
@@ -409,9 +577,26 @@
         window.localQueueIndex++;
         currentPrompt = null;
         
-        // Continue with next prompt immediately with error boundary
+        // Continue with next prompt with error boundary
+        // Add extra safety delay to ensure UI is truly ready
         setTimeout(() => {
           try {
+            // EXTRA SAFETY: Double-check stop button isn't visible before proceeding
+            const stopButtonStillVisible = isVisible('[data-testid="stop-button"]');
+            if (stopButtonStillVisible) {
+              console.warn(`⚠️ [Tab ${tabId}] Stop button still visible after completion, waiting additional 1s...`);
+              // Wait additional time and try again
+              setTimeout(() => {
+                try {
+                  processNextPromptSingleTab();
+                } catch (error) {
+                  console.error(`❌ [Tab ${tabId}] Error after delayed retry:`, error);
+                  isActive = false;
+                }
+              }, 1000);
+              return;
+            }
+            
             processNextPromptSingleTab();
           } catch (error) {
             console.error(`❌ [Tab ${tabId}] Error in recursive call to processNextPromptSingleTab:`, error);
@@ -422,7 +607,7 @@
               error: `Recursive processing error: ${error.message}`
             });
           }
-        }, 100); // Small delay to prevent stack overflow
+        }, 500); // Increased from 100ms to 500ms for better safety in Codex mode
       } else {
         // No more prompts available
         console.log(`🏁 [Tab ${tabId}] Single tab queue completed`);
@@ -516,9 +701,26 @@
 
         currentPrompt = null;
         
-        // Continue with next prompt immediately with error boundary
+        // Continue with next prompt with error boundary
+        // Add extra safety delay to ensure UI is truly ready
         setTimeout(() => {
           try {
+            // EXTRA SAFETY: Double-check stop button isn't visible before proceeding
+            const stopButtonStillVisible = isVisible('[data-testid="stop-button"]');
+            if (stopButtonStillVisible) {
+              console.warn(`⚠️ [Tab ${tabId}] Stop button still visible after completion, waiting additional 1s...`);
+              // Wait additional time and try again
+              setTimeout(() => {
+                try {
+                  processNextPrompt();
+                } catch (error) {
+                  console.error(`❌ [Tab ${tabId}] Error after delayed retry:`, error);
+                  isActive = false;
+                }
+              }, 1000);
+              return;
+            }
+            
             processNextPrompt();
           } catch (error) {
             console.error(`❌ [Tab ${tabId}] Error in recursive call to processNextPrompt:`, error);
@@ -529,7 +731,7 @@
               error: `Recursive processing error: ${error.message}`
             });
           }
-        }, 100); // Small delay to prevent stack overflow
+        }, 500); // Increased from 100ms to 500ms for better safety in Codex mode
       } else {
         // No more prompts available
         console.log(`🏁 [Tab ${tabId}] No more prompts available`);
@@ -646,6 +848,18 @@
     }
   };
 
+  // Enable debug mode for detailed completion logging
+  window.enableDebugMode = () => {
+    window.debugPromptQueuer = true;
+    console.log('🐛 Debug mode ENABLED - detailed completion checks will be logged');
+  };
+
+  window.disableDebugMode = () => {
+    window.debugPromptQueuer = false;
+    console.log('🐛 Debug mode DISABLED');
+  };
+
   console.log(`✅ ChatGPT Prompt Queuer content script loaded (Tab ID: ${tabId})`);
   console.log('🧪 Test prompt insertion with: window.testPromptInsertion()');
+  console.log('🐛 Enable debug mode with: window.enableDebugMode()');
 })(); 

@@ -8,6 +8,263 @@
   let multiTabMode = false;
   let activeTabs = [];
   let queueStatus = {};
+  let savedSeries = []; // Saved prompt series
+
+  // Helper functions for queue item structure
+  const createQueueItem = (text, attachments = []) => ({
+    text: text,
+    attachments: attachments // Array of { type, data, name, mimeType, size }
+  });
+
+  const normalizeQueueItem = (item) => {
+    // Backwards compatibility: convert strings to objects
+    if (typeof item === 'string') {
+      return createQueueItem(item);
+    }
+    // Ensure attachments array exists
+    if (!item.attachments) {
+      item.attachments = [];
+    }
+    return item;
+  };
+
+  const getQueueItemText = (item) => {
+    return typeof item === 'string' ? item : item.text;
+  };
+
+  const normalizeQueue = (q) => {
+    return q.map(item => normalizeQueueItem(item));
+  };
+
+  // File/Image handling functions
+  const readFileAsDataURL = (file) => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => resolve(e.target.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const addAttachmentToQueueItem = async (itemIndex, file) => {
+    try {
+      const dataURL = await readFileAsDataURL(file);
+      const attachment = {
+        type: file.type.startsWith('image/') ? 'image' : 'file',
+        data: dataURL,
+        name: file.name,
+        mimeType: file.type,
+        size: file.size
+      };
+
+      const item = normalizeQueueItem(queue[itemIndex]);
+      item.attachments.push(attachment);
+      queue[itemIndex] = item;
+      
+      console.log(`📎 Added attachment "${file.name}" to queue item ${itemIndex + 1}`);
+      return attachment;
+    } catch (error) {
+      console.error('Error adding attachment:', error);
+      throw error;
+    }
+  };
+
+  const removeAttachmentFromQueueItem = (itemIndex, attachmentIndex) => {
+    const item = normalizeQueueItem(queue[itemIndex]);
+    const removed = item.attachments.splice(attachmentIndex, 1);
+    queue[itemIndex] = item;
+    console.log(`🗑️ Removed attachment from queue item ${itemIndex + 1}`);
+    return removed;
+  };
+
+  const createThumbnailPreview = (attachment) => {
+    if (attachment.type === 'image') {
+      return `<img src="${attachment.data}" alt="${attachment.name}" class="pq-attachment-thumb" title="${attachment.name}">`;
+    } else {
+      // File icon
+      const ext = attachment.name.split('.').pop()?.toUpperCase() || 'FILE';
+      return `<div class="pq-attachment-thumb pq-file-thumb" title="${attachment.name}">${ext}</div>`;
+    }
+  };
+
+  const openFilePicker = (itemIndex, container) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.multiple = true;
+    input.accept = 'image/*,application/pdf,.txt,.md,.json,.csv,.doc,.docx,.xls,.xlsx';
+    
+    input.onchange = async (e) => {
+      const files = e.target.files;
+      if (files.length > 0) {
+        for (const file of files) {
+          try {
+            await addAttachmentToQueueItem(itemIndex, file);
+          } catch (error) {
+            console.error('Error adding file:', error);
+            alert(`Error adding file: ${error.message}`);
+          }
+        }
+        saveQueue();
+        updateUI(container);
+      }
+    };
+    
+    input.click();
+  };
+
+  // Series management functions
+  const createSeries = (name, description = '') => ({
+    id: Date.now().toString(36) + Math.random().toString(36).slice(2),
+    name: name,
+    description: description,
+    prompts: JSON.parse(JSON.stringify(queue)), // Deep copy
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    promptCount: queue.length,
+    hasAttachments: queue.some(item => {
+      const normalized = normalizeQueueItem(item);
+      return normalized.attachments && normalized.attachments.length > 0;
+    })
+  });
+
+  const saveSeries = async (name, description = '') => {
+    if (!name || name.trim() === '') {
+      throw new Error('Series name is required');
+    }
+
+    if (queue.length === 0) {
+      throw new Error('Cannot save empty series');
+    }
+
+    const series = createSeries(name.trim(), description.trim());
+    savedSeries.push(series);
+    await saveSeriesListToStorage();
+    console.log(`💾 Saved series "${name}" with ${series.promptCount} prompts`);
+    return series;
+  };
+
+  const loadSeries = (seriesId) => {
+    const series = savedSeries.find(s => s.id === seriesId);
+    if (!series) {
+      throw new Error('Series not found');
+    }
+
+    // Replace current queue with series prompts
+    queue = JSON.parse(JSON.stringify(series.prompts)); // Deep copy
+    saveQueue();
+    console.log(`📂 Loaded series "${series.name}" with ${queue.length} prompts`);
+    return series;
+  };
+
+  const deleteSeries = async (seriesId) => {
+    const index = savedSeries.findIndex(s => s.id === seriesId);
+    if (index === -1) {
+      throw new Error('Series not found');
+    }
+
+    const series = savedSeries[index];
+    savedSeries.splice(index, 1);
+    await saveSeriesListToStorage();
+    console.log(`🗑️ Deleted series "${series.name}"`);
+    return series;
+  };
+
+  const renameSeries = async (seriesId, newName, newDescription) => {
+    const series = savedSeries.find(s => s.id === seriesId);
+    if (!series) {
+      throw new Error('Series not found');
+    }
+
+    series.name = newName.trim();
+    series.description = newDescription?.trim() || '';
+    series.updatedAt = Date.now();
+    await saveSeriesListToStorage();
+    console.log(`✏️ Renamed series to "${newName}"`);
+    return series;
+  };
+
+  const updateSeries = async (seriesId) => {
+    const series = savedSeries.find(s => s.id === seriesId);
+    if (!series) {
+      throw new Error('Series not found');
+    }
+
+    if (queue.length === 0) {
+      throw new Error('Cannot update with empty queue');
+    }
+
+    series.prompts = JSON.parse(JSON.stringify(queue));
+    series.updatedAt = Date.now();
+    series.promptCount = queue.length;
+    series.hasAttachments = queue.some(item => {
+      const normalized = normalizeQueueItem(item);
+      return normalized.attachments && normalized.attachments.length > 0;
+    });
+    
+    await saveSeriesListToStorage();
+    console.log(`🔄 Updated series "${series.name}" with ${queue.length} prompts`);
+    return series;
+  };
+
+  const exportSeries = (seriesId) => {
+    const series = savedSeries.find(s => s.id === seriesId);
+    if (!series) {
+      throw new Error('Series not found');
+    }
+
+    const exportData = {
+      version: '1.0',
+      exportedAt: new Date().toISOString(),
+      series: series
+    };
+
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `prompt-series-${series.name.replace(/[^a-z0-9]/gi, '-')}-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    console.log(`📤 Exported series "${series.name}"`);
+  };
+
+  const importSeries = async (fileContent) => {
+    try {
+      const importData = JSON.parse(fileContent);
+      
+      if (!importData.series) {
+        throw new Error('Invalid series file format');
+      }
+
+      const series = importData.series;
+      
+      // Generate new ID to avoid conflicts
+      series.id = Date.now().toString(36) + Math.random().toString(36).slice(2);
+      series.updatedAt = Date.now();
+      
+      savedSeries.push(series);
+      await saveSeriesListToStorage();
+      console.log(`📥 Imported series "${series.name}"`);
+      return series;
+    } catch (error) {
+      throw new Error(`Failed to import series: ${error.message}`);
+    }
+  };
+
+  const saveSeriesListToStorage = async () => {
+    return chrome.storage.local.set({ savedSeries: savedSeries });
+  };
+
+  const loadSeriesListFromStorage = async () => {
+    try {
+      const result = await chrome.storage.local.get(['savedSeries']);
+      savedSeries = result.savedSeries || [];
+      console.log(`📚 Loaded ${savedSeries.length} saved series`);
+    } catch (error) {
+      console.error('Error loading saved series:', error);
+      savedSeries = [];
+    }
+  };
 
   // Create the UI container
   function createUIContainer() {
@@ -26,6 +283,7 @@
           <button class="pq-tab active" data-tab="manual">Manual</button>
           <button class="pq-tab" data-tab="matrix">List</button>
           <button class="pq-tab" data-tab="queue">Queue</button>
+          <button class="pq-tab" data-tab="series">Series</button>
           <button class="pq-tab" data-tab="multi">Multi-Tab</button>
           <button class="pq-tab" data-tab="history">History</button>
         </div>
@@ -72,7 +330,22 @@
 
           <button class="pq-button primary" id="pq-start-queue" disabled>Start Queue</button>
           <button class="pq-button warning" id="pq-stop-queue" disabled>Stop Queue</button>
+          <button class="pq-button" id="pq-save-as-series">💾 Save as Series</button>
           <button class="pq-button danger" id="pq-clear-queue">Clear Queue</button>
+        </div>
+
+        <!-- Series Tab -->
+        <div class="pq-tab-content" id="series">
+          <div class="pq-series-controls">
+            <button class="pq-button" id="pq-import-series">📥 Import Series</button>
+          </div>
+
+          <div class="pq-series-list" id="pq-series-list">
+            <div class="pq-empty-state">
+              <p>No saved series</p>
+              <p>Save your current queue as a series to reuse it later</p>
+            </div>
+          </div>
         </div>
 
         <!-- Multi-Tab Tab -->
@@ -329,21 +602,177 @@
         font-size: 10px;
       }
 
-      .pq-remove-btn {
+      .pq-queue-actions {
+        display: flex;
+        gap: 3px;
+        margin-left: 5px;
+      }
+
+      .pq-remove-btn, .pq-copy-btn {
         background: none;
         border: none;
-        color: #ff4444;
         font-size: 14px;
         font-weight: bold;
         cursor: pointer;
         padding: 0 5px;
-        margin-left: 5px;
         opacity: 0.7;
         transition: opacity 0.2s;
       }
 
+      .pq-remove-btn {
+        color: #ff4444;
+      }
+
       .pq-remove-btn:hover {
         opacity: 1;
+        color: #ff6666;
+      }
+
+      .pq-copy-btn {
+        color: #4CAF50;
+      }
+
+      .pq-copy-btn:hover {
+        opacity: 1;
+        color: #66dd88;
+      }
+
+      .pq-attach-btn {
+        color: #2196F3;
+      }
+
+      .pq-attach-btn:hover {
+        opacity: 1;
+        color: #64B5F6;
+      }
+
+      .pq-attachments {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        margin-top: 4px;
+        padding: 4px 0;
+      }
+
+      .pq-attachment-thumb {
+        width: 32px;
+        height: 32px;
+        border-radius: 4px;
+        object-fit: cover;
+        border: 1px solid rgba(255,255,255,0.2);
+        cursor: pointer;
+        position: relative;
+      }
+
+      .pq-file-thumb {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(33, 150, 243, 0.2);
+        color: #2196F3;
+        font-size: 8px;
+        font-weight: 600;
+      }
+
+      .pq-attachment-wrapper {
+        position: relative;
+      }
+
+      .pq-attachment-remove {
+        position: absolute;
+        top: -4px;
+        right: -4px;
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        background: #f44336;
+        color: white;
+        border: none;
+        font-size: 10px;
+        line-height: 1;
+        cursor: pointer;
+        display: none;
+        padding: 0;
+      }
+
+      .pq-attachment-wrapper:hover .pq-attachment-remove {
+        display: block;
+      }
+
+      .pq-queue-item.pq-drag-over {
+        background: rgba(33, 150, 243, 0.3) !important;
+        border-left: 3px solid #2196F3 !important;
+      }
+
+      .pq-series-controls {
+        margin-bottom: 15px;
+      }
+
+      .pq-series-list {
+        max-height: 300px;
+        overflow-y: auto;
+        background: rgba(255,255,255,0.05);
+        border-radius: 4px;
+        padding: 10px;
+      }
+
+      .pq-series-item {
+        background: rgba(255,255,255,0.1);
+        border-radius: 4px;
+        padding: 10px;
+        margin-bottom: 8px;
+        border-left: 3px solid #9C27B0;
+      }
+
+      .pq-series-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        margin-bottom: 6px;
+      }
+
+      .pq-series-name {
+        font-weight: 600;
+        font-size: 12px;
+        flex: 1;
+      }
+
+      .pq-series-meta {
+        font-size: 10px;
+        opacity: 0.7;
+        margin-bottom: 6px;
+      }
+
+      .pq-series-description {
+        font-size: 10px;
+        opacity: 0.8;
+        margin-bottom: 8px;
+        font-style: italic;
+      }
+
+      .pq-series-actions {
+        display: flex;
+        gap: 4px;
+        flex-wrap: wrap;
+      }
+
+      .pq-series-actions button {
+        background: rgba(255,255,255,0.1);
+        border: none;
+        color: white;
+        padding: 4px 8px;
+        border-radius: 3px;
+        font-size: 9px;
+        cursor: pointer;
+        transition: background 0.2s;
+      }
+
+      .pq-series-actions button:hover {
+        background: rgba(255,255,255,0.2);
+      }
+
+      .pq-series-actions button.danger:hover {
+        background: rgba(244, 67, 54, 0.3);
         color: #ff6666;
       }
 
@@ -531,6 +960,35 @@
       .pq-status-indicator.inactive {
         background: #666;
       }
+
+      .pq-tab-action-btn {
+        background: rgba(76, 175, 80, 0.8);
+        border: none;
+        color: white;
+        padding: 4px 8px;
+        border-radius: 3px;
+        font-size: 10px;
+        cursor: pointer;
+        transition: background 0.2s;
+        white-space: nowrap;
+      }
+
+      .pq-tab-action-btn:hover:not(:disabled) {
+        background: rgba(76, 175, 80, 1);
+      }
+
+      .pq-tab-action-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      .pq-tab-stop-btn {
+        background: rgba(255, 152, 0, 0.8);
+      }
+
+      .pq-tab-stop-btn:hover {
+        background: rgba(255, 152, 0, 1);
+      }
     `;
 
     document.head.appendChild(styles);
@@ -540,10 +998,12 @@
   }
 
   // Initialize the UI
-  function initUI() {
+  async function initUI() {
     const container = createUIContainer();
     setupEventListeners(container);
-    loadQueue();
+    await loadQueue(); // Wait for queue to load from storage
+    updateUI(container); // Update UI with loaded queue
+    loadSeriesListFromStorage(); // Load saved series
     loadHistory(container);
   }
 
@@ -598,6 +1058,15 @@
       clearQueue(container);
     });
 
+    // Series controls
+    container.querySelector('#pq-save-as-series').addEventListener('click', () => {
+      saveCurrentQueueAsSeries(container);
+    });
+
+    container.querySelector('#pq-import-series').addEventListener('click', () => {
+      importSeriesFromFile(container);
+    });
+
     // Multi-tab controls
     container.querySelector('#pq-start-multi-queue').addEventListener('click', () => {
       startMultiTabQueue(container);
@@ -609,6 +1078,17 @@
 
     container.querySelector('#pq-refresh-tabs').addEventListener('click', () => {
       refreshTabList(container);
+    });
+
+    // Per-tab start/stop buttons (delegated event listener)
+    container.querySelector('#pq-tabs-info').addEventListener('click', async (e) => {
+      if (e.target.classList.contains('pq-tab-start-btn')) {
+        const tabId = e.target.dataset.tabId;
+        await startSingleTab(tabId, container);
+      } else if (e.target.classList.contains('pq-tab-stop-btn')) {
+        const tabId = e.target.dataset.tabId;
+        await stopSingleTab(tabId, container);
+      }
     });
 
     // History controls
@@ -631,14 +1111,102 @@
       }
     });
 
-    // Queue item remove buttons (delegated event listener)
-    container.querySelector('#pq-queue-list').addEventListener('click', (e) => {
+    // Queue item action buttons (delegated event listener)
+    container.querySelector('#pq-queue-list').addEventListener('click', async (e) => {
       if (e.target.classList.contains('pq-remove-btn')) {
         const index = parseInt(e.target.dataset.index);
         queue.splice(index, 1);
         saveQueue();
         updateUI(container);
         console.log(`🗑️ Removed queue item at index ${index}`);
+      } else if (e.target.classList.contains('pq-copy-btn')) {
+        const index = parseInt(e.target.dataset.index);
+        const item = queue[index];
+        queue.push(JSON.parse(JSON.stringify(item))); // Deep copy
+        saveQueue();
+        updateUI(container);
+        console.log(`📋 Copied queue item ${index} to bottom: "${getQueueItemText(item).substring(0, 50)}..."`);
+      } else if (e.target.classList.contains('pq-attach-btn')) {
+        const index = parseInt(e.target.dataset.index);
+        openFilePicker(index, container);
+      } else if (e.target.classList.contains('pq-attachment-remove')) {
+        const wrapper = e.target.closest('.pq-attachment-wrapper');
+        const itemIndex = parseInt(wrapper.dataset.itemIndex);
+        const attIndex = parseInt(wrapper.dataset.attIndex);
+        removeAttachmentFromQueueItem(itemIndex, attIndex);
+        saveQueue();
+        updateUI(container);
+      }
+    });
+
+    // Drag and drop support for queue items
+    const queueListEl = container.querySelector('#pq-queue-list');
+    
+    queueListEl.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      
+      const queueItem = e.target.closest('.pq-queue-item');
+      if (queueItem) {
+        queueItem.classList.add('pq-drag-over');
+      }
+    });
+    
+    queueListEl.addEventListener('dragleave', (e) => {
+      const queueItem = e.target.closest('.pq-queue-item');
+      if (queueItem && !queueItem.contains(e.relatedTarget)) {
+        queueItem.classList.remove('pq-drag-over');
+      }
+    });
+    
+    queueListEl.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      
+      const queueItem = e.target.closest('.pq-queue-item');
+      if (queueItem) {
+        queueItem.classList.remove('pq-drag-over');
+        const index = parseInt(queueItem.dataset.index);
+        
+        if (e.dataTransfer.files.length > 0) {
+          for (const file of e.dataTransfer.files) {
+            try {
+              await addAttachmentToQueueItem(index, file);
+            } catch (error) {
+              console.error('Error adding dropped file:', error);
+              alert(`Error adding file: ${error.message}`);
+            }
+          }
+          saveQueue();
+          updateUI(container);
+        }
+      }
+    });
+
+    // Paste support for images
+    document.addEventListener('paste', async (e) => {
+      // Only handle paste if queue UI is visible and we're on the queue tab
+      if (!isUIVisible) return;
+      const queueTab = container.querySelector('#queue');
+      if (!queueTab.classList.contains('active')) return;
+      
+      const items = e.clipboardData.items;
+      for (const item of items) {
+        if (item.type.indexOf('image') !== -1) {
+          const file = item.getAsFile();
+          if (file && queue.length > 0) {
+            // Add to the last queue item
+            const lastIndex = queue.length - 1;
+            try {
+              await addAttachmentToQueueItem(lastIndex, file);
+              saveQueue();
+              updateUI(container);
+              console.log('📋 Pasted image to last queue item');
+            } catch (error) {
+              console.error('Error pasting image:', error);
+            }
+          }
+        }
       }
     });
   }
@@ -656,7 +1224,11 @@
     container.querySelector(`#${tabName}`).classList.add('active');
 
     if (tabName === 'multi') {
+      console.log('📡 Switching to multi-tab view, refreshing tab list...');
       refreshTabList(container);
+    } else if (tabName === 'series') {
+      console.log('📚 Switching to series view, refreshing series list...');
+      updateSeriesUI(container);
     } else if (tabName === 'history') {
       loadHistory(container);
     }
@@ -680,7 +1252,7 @@
     const prompt = textarea.value.trim();
     
     if (prompt) {
-      queue.push(prompt);
+      queue.push(createQueueItem(prompt));
       saveQueue();
       updateUI(container);
       textarea.value = '';
@@ -699,7 +1271,8 @@
       const parsed = parseMatrixLocal(input);
       
       if (parsed && parsed.length > 0) {
-        queue.push(...parsed);
+        // Convert parsed strings to queue items
+        queue.push(...parsed.map(text => createQueueItem(text)));
         saveQueue();
         updateUI(container);
         textarea.value = '';
@@ -774,33 +1347,17 @@
         // Initialize progress bar
         updateProgressBar(container, 0, queue.length);
 
-        // Delegate to content script via message passing
-        try {
-          const response = await chrome.runtime.sendMessage({
-            type: 'START_SINGLE_TAB_QUEUE',
-            messages: queue
-          });
-          
-          if (response && response.success) {
-            console.log('✅ Single tab queue started via content script');
-          } else {
-            throw new Error(response?.error || 'Failed to start single tab queue');
-          }
-        } catch (error) {
-          console.error('❌ Failed to start queue via content script, trying direct method:', error);
-          
-          // Fallback: try direct content script access
-          if (window.runPromptQueuerSingleTab) {
-            window.localQueue = [...queue];
-            window.localQueueIndex = 0;
-            if (window.setActive) window.setActive(true);
-            window.runPromptQueuerSingleTab();
-          } else {
-            throw new Error('Content script not available');
-          }
+        // Use direct content script access for single tab mode
+        // (We're already on the ChatGPT tab, no need for message passing)
+        if (window.runPromptQueuerSingleTab) {
+          window.localQueue = [...queue];
+          window.localQueueIndex = 0;
+          if (window.setActive) window.setActive(true);
+          window.runPromptQueuerSingleTab();
+          console.log('✅ Content script queue started');
+        } else {
+          throw new Error('Content script not available - please refresh the page');
         }
-        
-        console.log('Content script queue started');
       }
     } catch (error) {
       console.error('Error starting queue:', error);
@@ -816,15 +1373,18 @@
       // Stop the content script queue directly
       window.localQueue = null;
       window.localQueueIndex = 0;
+      if (window.setActive) window.setActive(false);
       
       isProcessing = false;
+      completedPrompts.clear(); // Clear completion tracking
+      currentProcessingIndex = -1; // Reset processing index
       hideProgress(container);
       
-      queue = [];
-      saveQueue();
+      // Don't clear the queue - just stop processing it
+      // The user can use "Clear Queue" if they want to empty it
       
       updateUI(container);
-      console.log('🛑 Queue stopped and cleared');
+      console.log('🛑 Queue stopped (queue preserved)');
     } catch (error) {
       console.error('Error stopping queue:', error);
     }
@@ -837,7 +1397,232 @@
     updateUI(container);
   }
 
+  // Series functions
+  async function saveCurrentQueueAsSeries(container) {
+    if (queue.length === 0) {
+      alert('Cannot save empty queue. Add some prompts first!');
+      return;
+    }
+
+    const name = prompt('Enter a name for this series:');
+    if (!name) return;
+
+    const description = prompt('Enter a description (optional):') || '';
+
+    try {
+      await saveSeries(name, description);
+      alert(`✅ Saved "${name}" with ${queue.length} prompts!`);
+      updateSeriesUI(container);
+    } catch (error) {
+      alert(`Error saving series: ${error.message}`);
+    }
+  }
+
+  async function importSeriesFromFile(container) {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+
+    input.onchange = async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      try {
+        const text = await file.text();
+        const series = await importSeries(text);
+        alert(`✅ Imported "${series.name}"!`);
+        updateSeriesUI(container);
+      } catch (error) {
+        alert(`Error importing series: ${error.message}`);
+      }
+    };
+
+    input.click();
+  }
+
+  function updateSeriesUI(container) {
+    const seriesList = container.querySelector('#pq-series-list');
+
+    if (savedSeries.length === 0) {
+      seriesList.innerHTML = `
+        <div class="pq-empty-state">
+          <p>No saved series</p>
+          <p>Save your current queue as a series to reuse it later</p>
+        </div>
+      `;
+      return;
+    }
+
+    seriesList.innerHTML = savedSeries
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .map(series => {
+        const date = new Date(series.updatedAt).toLocaleDateString();
+        const time = new Date(series.updatedAt).toLocaleTimeString();
+        
+        return `
+          <div class="pq-series-item">
+            <div class="pq-series-header">
+              <div class="pq-series-name">${escapeHtml(series.name)}</div>
+            </div>
+            ${series.description ? `<div class="pq-series-description">"${escapeHtml(series.description)}"</div>` : ''}
+            <div class="pq-series-meta">
+              ${series.promptCount} prompt${series.promptCount !== 1 ? 's' : ''}
+              ${series.hasAttachments ? '📎' : ''}
+              • Updated ${date} ${time}
+            </div>
+            <div class="pq-series-actions">
+              <button onclick="window.loadSeriesById('${series.id}')">📂 Load</button>
+              <button onclick="window.updateSeriesById('${series.id}')">🔄 Update</button>
+              <button onclick="window.renameSeriesById('${series.id}')">✏️ Rename</button>
+              <button onclick="window.exportSeriesById('${series.id}')">📤 Export</button>
+              <button class="danger" onclick="window.deleteSeriesById('${series.id}')">🗑️ Delete</button>
+            </div>
+          </div>
+        `;
+      })
+      .join('');
+  }
+
+  // Global functions for onclick handlers
+  window.loadSeriesById = (seriesId) => {
+    try {
+      const series = loadSeries(seriesId);
+      const container = document.querySelector('#prompt-queuer-ui');
+      updateUI(container);
+      switchTab('queue', container);
+      alert(`✅ Loaded "${series.name}" with ${queue.length} prompts!`);
+    } catch (error) {
+      alert(`Error loading series: ${error.message}`);
+    }
+  };
+
+  window.updateSeriesById = async (seriesId) => {
+    if (queue.length === 0) {
+      alert('Queue is empty. Add prompts before updating.');
+      return;
+    }
+
+    const series = savedSeries.find(s => s.id === seriesId);
+    if (!confirm(`Update "${series.name}" with current queue (${queue.length} prompts)?`)) {
+      return;
+    }
+
+    try {
+      await updateSeries(seriesId);
+      const container = document.querySelector('#prompt-queuer-ui');
+      updateSeriesUI(container);
+      alert(`✅ Updated "${series.name}"!`);
+    } catch (error) {
+      alert(`Error updating series: ${error.message}`);
+    }
+  };
+
+  window.renameSeriesById = async (seriesId) => {
+    const series = savedSeries.find(s => s.id === seriesId);
+    const newName = prompt('Enter new name:', series.name);
+    if (!newName) return;
+
+    const newDescription = prompt('Enter new description (optional):', series.description || '');
+
+    try {
+      await renameSeries(seriesId, newName, newDescription);
+      const container = document.querySelector('#prompt-queuer-ui');
+      updateSeriesUI(container);
+      alert(`✅ Renamed to "${newName}"!`);
+    } catch (error) {
+      alert(`Error renaming series: ${error.message}`);
+    }
+  };
+
+  window.exportSeriesById = (seriesId) => {
+    try {
+      exportSeries(seriesId);
+    } catch (error) {
+      alert(`Error exporting series: ${error.message}`);
+    }
+  };
+
+  window.deleteSeriesById = async (seriesId) => {
+    const series = savedSeries.find(s => s.id === seriesId);
+    if (!confirm(`Delete "${series.name}"? This cannot be undone.`)) {
+      return;
+    }
+
+    try {
+      await deleteSeries(seriesId);
+      const container = document.querySelector('#prompt-queuer-ui');
+      updateSeriesUI(container);
+      alert(`✅ Deleted "${series.name}"`);
+    } catch (error) {
+      alert(`Error deleting series: ${error.message}`);
+    }
+  };
+
   // Multi-tab functions
+  async function startSingleTab(tabId, container) {
+    if (queue.length === 0) {
+      alert('No prompts in queue');
+      return;
+    }
+
+    try {
+      console.log(`▶️ Starting tab ${tabId}...`);
+      
+      // Start multi-tab mode if not already processing
+      if (!isProcessing) {
+        const response = await chrome.runtime.sendMessage({
+          type: 'START_MULTI_TAB_QUEUE',
+          messages: queue
+        });
+        
+        if (!response.success) {
+          throw new Error(response.error || 'Failed to initialize multi-tab queue');
+        }
+        
+        isProcessing = true;
+      }
+      
+      // Send start message to specific tab
+      const tab = activeTabs.find(t => t.tabId === tabId);
+      if (tab && tab.chromeTabId) {
+        await chrome.tabs.sendMessage(tab.chromeTabId, {
+          type: 'START_QUEUE'
+        });
+        console.log(`✅ Started tab ${tabId}`);
+        
+        // Refresh UI after a moment
+        setTimeout(() => refreshTabList(container), 500);
+      } else {
+        throw new Error('Tab not found or no Chrome tab ID');
+      }
+    } catch (error) {
+      console.error('Error starting tab:', error);
+      alert(`Error starting tab: ${error.message}`);
+    }
+  }
+
+  async function stopSingleTab(tabId, container) {
+    try {
+      console.log(`⏹️ Stopping tab ${tabId}...`);
+      
+      const tab = activeTabs.find(t => t.tabId === tabId);
+      if (tab && tab.chromeTabId) {
+        await chrome.tabs.sendMessage(tab.chromeTabId, {
+          type: 'STOP_QUEUE'
+        });
+        console.log(`✅ Stopped tab ${tabId}`);
+        
+        // Refresh UI after a moment
+        setTimeout(() => refreshTabList(container), 500);
+      } else {
+        throw new Error('Tab not found or no Chrome tab ID');
+      }
+    } catch (error) {
+      console.error('Error stopping tab:', error);
+      alert(`Error stopping tab: ${error.message}`);
+    }
+  }
+
   async function startMultiTabQueue(container) {
     if (queue.length === 0) {
       alert('No prompts in queue');
@@ -853,7 +1638,23 @@
       if (response.success) {
         isProcessing = true;
         saveQueue();
+        
+        // Start all inactive tabs
+        const inactiveTabs = activeTabs.filter(t => !t.isActive && t.status !== 'processing');
+        for (const tab of inactiveTabs) {
+          if (tab.chromeTabId) {
+            try {
+              await chrome.tabs.sendMessage(tab.chromeTabId, {
+                type: 'START_QUEUE'
+              });
+            } catch (error) {
+              console.error(`Failed to start tab ${tab.tabId}:`, error);
+            }
+          }
+        }
+        
         updateUI(container);
+        setTimeout(() => refreshTabList(container), 500);
         console.log(`Started multi-tab queue with ${response.activeTabs} tabs`);
       } else {
         if (response.error && response.error.includes('No active ChatGPT tabs')) {
@@ -887,14 +1688,31 @@
 
   async function refreshTabList(container) {
     try {
+      console.log('📡 Requesting tab list from background script...');
       const response = await chrome.runtime.sendMessage({
         type: 'GET_ACTIVE_TABS'
       });
 
       activeTabs = response.tabs || [];
+      console.log(`✅ Received ${activeTabs.length} tab(s):`, activeTabs.map(t => ({
+        id: t.tabId.substring(0, 8),
+        url: t.url.substring(0, 50),
+        status: t.status || (t.isActive ? 'processing' : 'ready')
+      })));
+      
       updateMultiTabUI(container);
     } catch (error) {
-      console.error('Error refreshing tab list:', error);
+      console.error('❌ Error refreshing tab list:', error);
+      // Show error in UI
+      if (container.querySelector('#pq-tabs-info')) {
+        container.querySelector('#pq-tabs-info').innerHTML = `
+          <div class="pq-empty-state">
+            <p style="color: #f44336;">Error loading tabs</p>
+            <p style="font-size: 10px;">${error.message}</p>
+            <p style="font-size: 10px; margin-top: 8px;">Try refreshing the page</p>
+          </div>
+        `;
+      }
     }
   }
 
@@ -1044,7 +1862,7 @@
   async function loadQueue() {
     try {
       const result = await chrome.storage.local.get(['queue']);
-      queue = result.queue || [];
+      queue = normalizeQueue(result.queue || []);
       console.log('Loaded queue:', queue);
     } catch (error) {
       console.error('Error loading queue:', error);
@@ -1076,7 +1894,8 @@
         </div>
       `;
     } else {
-      queueList.innerHTML = queue.map((prompt, index) => {
+      queueList.innerHTML = queue.map((item, index) => {
+        const queueItem = normalizeQueueItem(item);
         const isProcessingItem = isProcessing && currentProcessingIndex === index;
         const isCompleted = completedPrompts.has(index);
         
@@ -1091,12 +1910,29 @@
           statusText = '⏳';
         }
         
+        // Generate attachment previews
+        const attachmentPreviews = queueItem.attachments.map((att, attIdx) => {
+          return `
+            <div class="pq-attachment-wrapper" data-item-index="${index}" data-att-index="${attIdx}">
+              ${createThumbnailPreview(att)}
+              <button class="pq-attachment-remove" title="Remove attachment">×</button>
+            </div>
+          `;
+        }).join('');
+        
         return `
-          <div class="pq-queue-item ${statusClass}">
+          <div class="pq-queue-item ${statusClass}" data-index="${index}" draggable="false">
             <div class="index">${index + 1}</div>
-            <div class="text">${escapeHtml(prompt)}</div>
+            <div style="flex: 1;">
+              <div class="text">${escapeHtml(queueItem.text)}</div>
+              ${queueItem.attachments.length > 0 ? `<div class="pq-attachments">${attachmentPreviews}</div>` : ''}
+            </div>
             <div class="status">${statusText}</div>
-            <button class="pq-remove-btn" data-index="${index}" title="Remove from queue">×</button>
+            <div class="pq-queue-actions">
+              <button class="pq-attach-btn" data-index="${index}" title="Add file/image">📎</button>
+              <button class="pq-copy-btn" data-index="${index}" title="Copy to bottom of queue">↓</button>
+              <button class="pq-remove-btn" data-index="${index}" title="Remove from queue">×</button>
+            </div>
           </div>
         `;
       }).join('');
@@ -1109,33 +1945,70 @@
   }
 
   function updateMultiTabUI(container) {
-    const startButton = container.querySelector('#pq-start-multi-queue');
-    const stopButton = container.querySelector('#pq-stop-multi-queue');
+    const startAllButton = container.querySelector('#pq-start-multi-queue');
+    const stopAllButton = container.querySelector('#pq-stop-multi-queue');
 
     if (activeTabs.length === 0) {
       container.querySelector('#pq-tabs-info').innerHTML = `
         <div class="pq-empty-state">
           <p>No ChatGPT tabs detected</p>
-          <p>Open multiple ChatGPT tabs to use multi-tab mode</p>
+          <p>Make sure this page is open in a ChatGPT tab, or open additional tabs</p>
+          <p style="font-size: 10px; margin-top: 8px;">Try clicking "Refresh Tab List" below</p>
         </div>
       `;
     } else {
-      container.querySelector('#pq-tabs-info').innerHTML = activeTabs.map(tab => `
-        <div class="pq-tab-info">
-          <div class="pq-status-indicator ${tab.isActive ? 'active' : 'inactive'}"></div>
-          <div class="tab-details">
-            <div>Tab ${tab.tabId}</div>
-            <div style="font-size: 9px; opacity: 0.7;">
-              ${tab.isActive ? 'Processing' : 'Ready'}
-              ${tab.currentPrompt ? `: "${tab.currentPrompt.substring(0, 20)}..."` : ''}
+      container.querySelector('#pq-tabs-info').innerHTML = activeTabs.map(tab => {
+        const status = tab.status || (tab.isActive ? 'processing' : 'ready');
+        const statusText = status === 'processing' ? 'Processing' : 
+                          status === 'ready' ? 'Ready' : 'Unknown';
+        const statusColor = status === 'processing' ? 'active' : 'inactive';
+        const isProcessingNow = status === 'processing' || tab.isActive;
+        
+        return `
+          <div class="pq-tab-info">
+            <div class="pq-status-indicator ${statusColor}"></div>
+            <div class="tab-details" style="flex: 1;">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                  <div>Tab ${tab.tabId.substring(0, 8)}... <span style="opacity: 0.5; font-size: 9px;">(${statusText})</span></div>
+                  <div style="font-size: 9px; opacity: 0.7;">
+                    ${tab.currentPrompt ? `"${tab.currentPrompt.substring(0, 30)}..."` : 'Waiting for prompts'}
+                  </div>
+                </div>
+                <div style="display: flex; gap: 4px;">
+                  ${isProcessingNow ? 
+                    `<button class="pq-tab-action-btn pq-tab-stop-btn" data-tab-id="${tab.tabId}" title="Stop this tab">⏹️ Stop</button>` :
+                    `<button class="pq-tab-action-btn pq-tab-start-btn" data-tab-id="${tab.tabId}" title="Start processing on this tab" ${queue.length === 0 ? 'disabled' : ''}>▶️ Start</button>`
+                  }
+                </div>
+              </div>
             </div>
           </div>
-        </div>
-      `).join('');
+        `;
+      }).join('');
     }
 
-    startButton.disabled = queue.length === 0 || isProcessing || activeTabs.length === 0;
-    stopButton.disabled = !isProcessing;
+    // Update stats
+    const activeCount = activeTabs.filter(t => t.isActive || t.status === 'processing').length;
+    const totalTabs = activeTabs.length;
+    container.querySelector('#pq-active-tabs-count').textContent = activeCount;
+    container.querySelector('#pq-queue-length').textContent = queue.length;
+    
+    // Update completed count if we have the data
+    const completedEl = container.querySelector('#pq-completed-count');
+    if (completedEl) {
+      // Get completed count from queue or multi-tab manager
+      completedEl.textContent = completedPrompts.size || 0;
+    }
+
+    // Start All: enabled if we have queue items and at least one inactive tab
+    const hasInactiveTabs = activeTabs.some(t => !t.isActive && t.status !== 'processing');
+    startAllButton.disabled = queue.length === 0 || !hasInactiveTabs;
+    startAllButton.textContent = activeCount > 0 ? `▶️ Start Remaining (${totalTabs - activeCount})` : '▶️ Start All';
+    
+    // Stop All: enabled if any tab is processing
+    stopAllButton.disabled = activeCount === 0;
+    stopAllButton.textContent = `⏹️ Stop All (${activeCount})`;
   }
 
   function showProgress(container) {
@@ -1242,8 +2115,8 @@
       isProcessing = false;
       currentProcessingIndex = -1;
       
-      queue = [];
-      saveQueue();
+      // Don't clear the queue - user might want to re-run it
+      // They can use "Clear Queue" if they want to empty it
       
       hideProgress(container);
       updateUI(container);
@@ -1256,7 +2129,7 @@
         }, 3000);
       }
       
-      console.log(`🏁 Queue completed and cleared. Processed ${totalPrompts} prompts across ${activeTabs} tabs`);
+      console.log(`🏁 Queue completed (queue preserved). Processed ${totalPrompts} prompts across ${activeTabs} tabs`);
     } else {
       console.log(`⚠️ Ignoring queue completion - not processing or queue already empty`);
     }

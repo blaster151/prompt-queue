@@ -17,8 +17,16 @@ class MultiTabManager {
 
     // Handle messages from content scripts and popup
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      // Only return true for message types that need async responses
+      const needsAsyncResponse = [
+        'REQUEST_NEXT_PROMPT',
+        'START_MULTI_TAB_QUEUE',
+        'STOP_MULTI_TAB_QUEUE',
+        'START_SINGLE_TAB_QUEUE'
+      ].includes(message.type);
+      
       this.handleMessage(message, sender, sendResponse);
-      return true; // Keep message channel open for async responses
+      return needsAsyncResponse; // Only keep channel open if async response needed
     });
 
     // Listen for tab removal events
@@ -43,6 +51,7 @@ class MultiTabManager {
 
       case 'TAB_VISIBILITY_CHANGE':
         this.updateTabVisibility(message.tabId, message.isVisible);
+        sendResponse({ success: true });
         break;
 
       case 'REQUEST_NEXT_PROMPT':
@@ -83,14 +92,19 @@ class MultiTabManager {
         break;
 
       case 'GET_ACTIVE_TABS':
-        sendResponse({
-          tabs: Array.from(this.tabs.values()).filter(tab => tab.isActive)
-        });
+        // Return ALL registered ChatGPT tabs, not just ones actively processing
+        const allTabs = Array.from(this.tabs.values()).map(tab => ({
+          ...tab,
+          status: tab.isActive ? 'processing' : 'ready'
+        }));
+        console.log(`📋 GET_ACTIVE_TABS: Returning ${allTabs.length} registered tab(s)`);
+        sendResponse({ tabs: allTabs });
         break;
 
       // Forward progress updates to popup
       case 'PROGRESS_UPDATE':
         chrome.runtime.sendMessage(message);
+        sendResponse({ success: true });
         break;
 
       case 'START_SINGLE_TAB_QUEUE':
