@@ -204,7 +204,7 @@
     }
   };
 
-  const isResponseComplete = () => {
+  const isResponseComplete = (previousResponseId = null) => {
     // CRITICAL: If stop button is visible, response is definitely in progress
     // This is a hard requirement that overrides all other checks
     const stopButtonVisible = isVisible('[data-testid="stop-button"]');
@@ -214,6 +214,18 @@
         console.log('🛑 Stop button visible - response still in progress');
       }
       return false;
+    }
+    
+    // Never report completion using the same message that existed before this
+    // prompt was sent - a truly new assistant message must have appeared.
+    if (previousResponseId !== null) {
+      const currentId = getLastResponseId();
+      if (!currentId || currentId === previousResponseId) {
+        if (window.debugPromptQueuer) {
+          console.log('⏳ Last response ID unchanged from before send - no new message yet');
+        }
+        return false;
+      }
     }
     
     // Try multiple strategies to detect if response is complete
@@ -281,7 +293,7 @@
     return isComplete;
   };
 
-  const waitForResponseToFinish = async () => {
+  const waitForResponseToFinish = async (previousResponseId = null) => {
     console.log("⏳ Waiting for assistant to finish…");
 
     return new Promise((resolve) => {
@@ -298,7 +310,7 @@
           return false;
         }
         
-        if (isResponseComplete()) {
+        if (isResponseComplete(previousResponseId)) {
           console.log(`✅ Assistant response is complete. (${checkCount} checks, ${elapsedMs}ms elapsed)`);
           resolve();
           return true;
@@ -523,6 +535,8 @@
           status: 'sending'
         });
         
+        const previousResponseId = getLastResponseId();
+
         await sendMessage(currentPrompt);
 
         const newIdAppeared = async () => {
@@ -530,7 +544,7 @@
             const observer = new MutationObserver(() => {
               const current = getLastResponse();
               const currentId = current?.getAttribute("data-message-id");
-              if (currentId && currentId !== getLastResponseId()) {
+              if (currentId && currentId !== previousResponseId) {
                 observer.disconnect();
                 resolve();
               }
@@ -545,7 +559,7 @@
         };
 
         await newIdAppeared();
-        await waitForResponseToFinish();
+        await waitForResponseToFinish(previousResponseId);
         // No delay needed - response is already complete
 
         // Get the response content
@@ -662,6 +676,8 @@
           status: 'sending'
         });
         
+        const previousResponseId = getLastResponseId();
+
         await sendMessage(currentPrompt);
 
         const newIdAppeared = async () => {
@@ -669,7 +685,7 @@
             const observer = new MutationObserver(() => {
               const current = getLastResponse();
               const currentId = current?.getAttribute("data-message-id");
-              if (currentId && currentId !== getLastResponseId()) {
+              if (currentId && currentId !== previousResponseId) {
                 observer.disconnect();
                 resolve();
               }
@@ -684,7 +700,7 @@
         };
 
         await newIdAppeared();
-        await waitForResponseToFinish();
+        await waitForResponseToFinish(previousResponseId);
         // No delay needed - response is already complete
 
         // Get the response content

@@ -337,7 +337,7 @@ class MultiTabManager {
     // Start processing on all active tabs
     const startPromises = activeTabs.map(async (tab) => {
       try {
-        const response = await chrome.tabs.sendMessage(tab.tabId, {
+        const response = await chrome.tabs.sendMessage(tab.chromeTabId, {
           type: 'START_QUEUE'
         });
         return { tabId: tab.tabId, success: true };
@@ -373,7 +373,7 @@ class MultiTabManager {
     // Stop all active tabs
     this.tabs.forEach((tab, tabId) => {
       if (tab.isActive) {
-        chrome.tabs.sendMessage(tabId, { type: 'STOP_QUEUE' }).catch(() => {
+        chrome.tabs.sendMessage(tab.chromeTabId, { type: 'STOP_QUEUE' }).catch(() => {
           // Tab might be closed, ignore errors
         });
         tab.isActive = false;
