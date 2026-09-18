@@ -318,6 +318,8 @@ class PromptQueuer {
                 await this.startMultiTabQueue();
             } else {
                 console.log('Starting single tab queue with messages:', this.queue);
+                this.completedPrompts.clear();
+                this.currentProcessingIndex = -1;
                 this.isProcessing = true;
                 this.saveQueue(); // Broadcast processing state to other popups
                 this.updateUI();
@@ -358,6 +360,8 @@ class PromptQueuer {
             ]);
 
             if (response && response.success) {
+                this.completedPrompts.clear();
+                this.currentProcessingIndex = -1;
                 this.isProcessing = true;
                 this.saveQueue(); // Broadcast processing state to other popups
                 this.updateUI();
@@ -510,7 +514,15 @@ class PromptQueuer {
                     this.completedPrompts.add(queueIndex);
                 }
             }
-            this.updateUI();
+
+            if (this.queue.length > 0 && this.completedPrompts.size >= this.queue.length) {
+                this.isProcessing = false;
+                this.currentProcessingIndex = -1;
+                this.hideProgress();
+                this.updateUI();
+            } else {
+                this.updateUI();
+            }
             
             // Refresh history if on history tab
             if (this.getCurrentTab() === 'history') {

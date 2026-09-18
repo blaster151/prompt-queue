@@ -1380,6 +1380,8 @@
         await startMultiTabQueue(container);
       } else {
         console.log('Starting single tab queue with messages:', queue);
+        completedPrompts.clear();
+        currentProcessingIndex = -1;
         isProcessing = true;
         saveQueue();
         updateUI(container);
@@ -2060,6 +2062,23 @@
     container.querySelector('#pq-progress').style.display = 'none';
   }
 
+  function finalizeQueueIfComplete(container) {
+    if (!container || queue.length === 0) return;
+
+    if (completedPrompts.size >= queue.length) {
+      isProcessing = false;
+      currentProcessingIndex = -1;
+      hideProgress(container);
+
+      const status = container.querySelector('#pq-status');
+      if (status) {
+        status.textContent = `✅ Queue completed! Processed ${queue.length} prompts`;
+      }
+
+      updateUI(container);
+    }
+  }
+
   // Progress update function for content script to call
   window.updateQueueProgress = function(promptIndex, status) {
     console.log(`📊 Progress update: ${promptIndex} - ${status}`);
@@ -2076,6 +2095,7 @@
     if (container) {
       updateUI(container);
       updateProgressBar(container, promptIndex + 1, queue.length);
+      finalizeQueueIfComplete(container);
     }
   };
 
