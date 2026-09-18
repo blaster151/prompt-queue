@@ -17,6 +17,11 @@
   let isActive = false;
   let currentPrompt = null;
 
+  const createQueueItem = (text, index) => ({
+    id: `queue-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 10)}`,
+    text
+  });
+
   const getInput = () => {
     // Try multiple selectors in order of preference
     const selectors = [
@@ -519,7 +524,9 @@
       }
       window.processingSingleTab = true;
       if (window.localQueueIndex < window.localQueue.length) {
-        currentPrompt = window.localQueue[window.localQueueIndex];
+        const queueItem = window.localQueue[window.localQueueIndex];
+        currentPrompt = queueItem.text;
+        const promptId = queueItem.id;
         console.log(`📨 [Tab ${tabId}] Sending prompt ${window.localQueueIndex + 1}/${window.localQueue.length}: "${currentPrompt}"`);
         
         // Update progress in in-page UI
@@ -584,6 +591,7 @@
           type: 'PROMPT_COMPLETED',
           tabId: tabId,
           prompt: currentPrompt,
+          promptId: promptId,
           promptIndex: window.localQueueIndex,
           response: responseContent
         });
@@ -665,6 +673,7 @@
       if (response && response.prompt) {
         currentPrompt = response.prompt;
         const promptIndex = response.index;
+        const promptId = response.promptId;
         console.log(`📨 [Tab ${tabId}] Sending prompt ${promptIndex + 1}: "${currentPrompt}"`);
         
         // Send progress update to popup
@@ -711,6 +720,7 @@
           type: 'PROMPT_COMPLETED',
           tabId: tabId,
           prompt: currentPrompt,
+          promptId: promptId,
           promptIndex: promptIndex,
           response: responseContent
         });
@@ -783,7 +793,7 @@
       if (request.messages && request.messages.length > 0) {
         console.log(`📨 [Tab ${tabId}] Starting single tab mode with ${request.messages.length} messages`);
         // Store messages locally for single tab mode
-        window.localQueue = request.messages;
+        window.localQueue = request.messages.map((text, index) => createQueueItem(text, index));
         window.localQueueIndex = 0;
         processNextPromptSingleTab();
       } else {
@@ -803,7 +813,7 @@
       console.log(`🚀 [Tab ${tabId}] Starting single tab queue via message...`);
       if (request.messages && request.messages.length > 0) {
         isActive = true;
-        window.localQueue = request.messages;
+        window.localQueue = request.messages.map((text, index) => createQueueItem(text, index));
         window.localQueueIndex = 0;
         
         try {

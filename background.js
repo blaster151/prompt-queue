@@ -5,7 +5,7 @@ class MultiTabManager {
     this.queue = [];
     this.isProcessing = false;
     this.currentIndex = 0;
-    this.completedPrompts = new Set();
+    this.completedPromptIds = new Set();
     
     this.init();
   }
@@ -59,7 +59,7 @@ class MultiTabManager {
         break;
 
       case 'PROMPT_COMPLETED':
-        this.handlePromptCompleted(message.tabId, message.prompt, message.response);
+        this.handlePromptCompleted(message.tabId, message.prompt, message.response, message.promptId);
         sendResponse({ success: true });
         break;
 
@@ -86,7 +86,7 @@ class MultiTabManager {
           isProcessing: this.isProcessing,
           queueLength: this.queue.length,
           currentIndex: this.currentIndex,
-          completedCount: this.completedPrompts.size,
+          completedCount: this.completedPromptIds.size,
           activeTabs: Array.from(this.tabs.values()).filter(tab => tab.isActive).length
         });
         break;
@@ -160,7 +160,9 @@ class MultiTabManager {
       return;
     }
 
-    const prompt = this.queue[this.currentIndex];
+    const queueItem = this.queue[this.currentIndex];
+    const prompt = queueItem.text;
+    const promptId = queueItem.id;
     const promptIndex = this.currentIndex;
     this.currentIndex++;
 
@@ -169,16 +171,18 @@ class MultiTabManager {
     if (tab) {
       tab.isActive = true;
       tab.currentPrompt = prompt;
+      tab.currentPromptId = promptId;
       tab.currentPromptIndex = promptIndex;
       tab.lastActivity = Date.now();
     }
 
     console.log(`📤 [Tab ${tabId}] Assigned prompt ${promptIndex + 1}/${this.queue.length}: "${prompt}"`);
-    sendResponse({ prompt: prompt, index: promptIndex });
+    sendResponse({ prompt: prompt, promptId: promptId, index: promptIndex });
   }
 
-  handlePromptCompleted(tabId, prompt, response) {
-    this.completedPrompts.add(prompt);
+  handlePromptCompleted(tabId, prompt, response, promptId = null) {
+    const completionKey = promptId || prompt;
+    this.completedPromptIds.add(completionKey);
     
     // Store the prompt-response pair
     if (response) {
@@ -188,13 +192,14 @@ class MultiTabManager {
     const tab = this.tabs.get(tabId);
     if (tab) {
       tab.currentPrompt = null;
+      tab.currentPromptId = null;
       tab.currentPromptIndex = null;
     }
 
     console.log(`✅ [Tab ${tabId}] Completed prompt: "${prompt}"`);
     
     // Check if all prompts are completed
-    if (this.completedPrompts.size >= this.queue.length) {
+    if (this.completedPromptIds.size >= this.queue.length) {
       this.onQueueComplete();
     }
   }
@@ -327,9 +332,13 @@ class MultiTabManager {
     }
 
     // Initialize queue
-    this.queue = [...messages];
+    this.queue = messages.map((text, index) => ({
+      id: `queue-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 10)}`,
+      text,
+      index
+    }));
     this.currentIndex = 0;
-    this.completedPrompts.clear();
+    this.completedPromptIds.clear();
     this.isProcessing = true;
 
     console.log(`🚀 Starting multi-tab queue with ${messages.length} prompts across ${activeTabs.length} tabs`);
@@ -367,7 +376,7 @@ class MultiTabManager {
   stopMultiTabQueue(sendResponse) {
     this.isProcessing = false;
     this.currentIndex = 0;
-    this.completedPrompts.clear();
+    this.completedPromptIds.clear();
     this.queue = []; // Clear the queue
 
     // Stop all active tabs
