@@ -22,10 +22,29 @@
     text
   });
 
+  const getComposerRoot = () => {
+    const candidates = [
+      '[data-testid="conversation-composer"]',
+      '[data-testid="composer"]',
+      '[data-testid="conversation-compose-textarea"]',
+      'form',
+      'main'
+    ];
+
+    for (const selector of candidates) {
+      const el = document.querySelector(selector);
+      if (el) return el;
+    }
+
+    const input = getInput();
+    return input ? input.closest('form, main, div') : document.body;
+  };
+
   const getInput = () => {
     // Try multiple selectors in order of preference
     const selectors = [
       'div[contenteditable="true"][data-testid="conversation-compose-textarea"]',
+      'div[contenteditable="true"][data-testid="composer-input"]',
       'div[contenteditable="true"]',
       'textarea[placeholder*="message"]',
       'textarea[placeholder*="Message"]',
@@ -71,55 +90,51 @@
       );
     };
     
-    // Try multiple strategies to find the send button
+    const composerRoot = getComposerRoot();
+    const candidateButtons = () => {
+      const root = composerRoot || document.body;
+      return Array.from(root.querySelectorAll('button:not([disabled])'));
+    };
+
+    // Try multiple strategies to find the send button, all scoped to the composer region
     const strategies = [
       // Strategy 1: Look for data-testid (most reliable)
-      () => document.querySelector('button[data-testid="send-button"]'),
+      () => composerRoot?.querySelector('button[data-testid="send-button"]') || document.querySelector('button[data-testid="send-button"]'),
       
       // Strategy 2: Look for specific SVG path (current ChatGPT)
-      () => Array.from(document.querySelectorAll('button'))
-        .find(btn => {
-          if (isLikelyNavigationButton(btn)) return false;
-          return btn.querySelector('svg path[d*="M10.5 4.5l7 7-7 7"]');
-        }),
+      () => candidateButtons().find(btn => {
+        if (isLikelyNavigationButton(btn)) return false;
+        return btn.querySelector('svg path[d*="M10.5 4.5l7 7-7 7"]');
+      }),
       
       // Strategy 3: Look for common send button patterns
-      () => Array.from(document.querySelectorAll('button'))
-        .find(btn => {
-          if (isLikelyNavigationButton(btn)) return false;
-          const text = btn.textContent?.toLowerCase() || '';
-          const ariaLabel = btn.getAttribute('aria-label')?.toLowerCase() || '';
-          return text.includes('send') || ariaLabel.includes('send') || 
-                 text.includes('submit') || ariaLabel.includes('submit');
-        }),
+      () => candidateButtons().find(btn => {
+        if (isLikelyNavigationButton(btn)) return false;
+        const text = btn.textContent?.toLowerCase() || '';
+        const ariaLabel = btn.getAttribute('aria-label')?.toLowerCase() || '';
+        return text.includes('send') || ariaLabel.includes('send') || 
+               text.includes('submit') || ariaLabel.includes('submit');
+      }),
       
       // Strategy 4: Look for buttons with send-like icons (arrow pointing right/up)
-      () => Array.from(document.querySelectorAll('button'))
-        .find(btn => {
-          if (isLikelyNavigationButton(btn)) return false;
-          const svg = btn.querySelector('svg');
-          if (!svg) return false;
-          const paths = svg.querySelectorAll('path');
-          return Array.from(paths).some(path => {
-            const d = path.getAttribute('d') || '';
-            // More specific: must be a reasonably long path (icon) and not too complex
-            return d.includes('M') && d.includes('L') && d.length > 20 && d.length < 200;
-          });
-        }),
+      () => candidateButtons().find(btn => {
+        if (isLikelyNavigationButton(btn)) return false;
+        const svg = btn.querySelector('svg');
+        if (!svg) return false;
+        const paths = svg.querySelectorAll('path');
+        return Array.from(paths).some(path => {
+          const d = path.getAttribute('d') || '';
+          return d.includes('M') && d.includes('L') && d.length > 20 && d.length < 200;
+        });
+      }),
       
-      // Strategy 5: Look for button near input (LAST RESORT - most dangerous)
+      // Strategy 5: Look for the last enabled button in the composer, with navigation filtering
       () => {
         const input = getInput();
-        if (!input) return null;
-        const container = input.closest('form') || input.parentElement;
-        if (!container) return null;
-        
-        // Get all buttons in container
+        const container = input ? (input.closest('form, [data-testid="composer"], [data-testid="conversation-composer"], main, div') || composerRoot || document.body) : (composerRoot || document.body);
         const buttons = Array.from(container.querySelectorAll('button:not([disabled])'));
-        
-        // Filter out navigation buttons and prefer the last button (usually send)
         const safeButtons = buttons.filter(btn => !isLikelyNavigationButton(btn));
-        return safeButtons[safeButtons.length - 1]; // Return last button in DOM order
+        return safeButtons[safeButtons.length - 1] || null;
       }
     ];
     
@@ -138,21 +153,40 @@
     return null;
   };
 
+  const getConversationRoot = () => {
+    const rootCandidates = [
+      '[data-testid="conversation-turns"]',
+      '[data-testid="chat-turns"]',
+      '[data-testid="conversation"]',
+      'main',
+      'body'
+    ];
+
+    for (const selector of rootCandidates) {
+      const el = document.querySelector(selector);
+      if (el) return el;
+    }
+
+    return document.body;
+  };
+
   const getLastResponse = () => {
-    // Try multiple strategies to find the last response
+    const root = getConversationRoot();
+
+    // Try multiple strategies to find the last response, preferring a narrow root
     const strategies = [
       // Strategy 1: Current ChatGPT format
-      () => [...document.querySelectorAll('[data-message-author-role="assistant"]')].pop(),
+      () => [...root.querySelectorAll('[data-message-author-role="assistant"]')].pop(),
       
       // Strategy 2: Alternative data attributes
-      () => [...document.querySelectorAll('[data-author="assistant"]')].pop(),
+      () => [...root.querySelectorAll('[data-author="assistant"]')].pop(),
       
       // Strategy 3: Look for response containers with specific classes
-      () => [...document.querySelectorAll('.response-container, .assistant-message, .bot-message')].pop(),
+      () => [...root.querySelectorAll('.response-container, .assistant-message, .bot-message')].pop(),
       
       // Strategy 4: Find messages that are not from user
       () => {
-        const allMessages = document.querySelectorAll('[data-message-author-role]');
+        const allMessages = root.querySelectorAll('[data-message-author-role]');
         const assistantMessages = Array.from(allMessages).filter(msg => 
           !msg.getAttribute('data-message-author-role').includes('user')
         );
@@ -329,13 +363,13 @@
         return false;
       };
 
-      // Don't check immediately - wait a bit for response to start
-      // Then check every 100ms
+      // Don't check immediately - wait a bit for response to start.
+      // 200ms keeps the detector responsive without being overly noisy.
       const interval = setInterval(() => {
         if (checkCompletion()) {
           clearInterval(interval);
         }
-      }, 100);
+      }, 200);
 
       // Timeout after 5 minutes - but ONLY if stop button is not visible
       // NEVER assume response is done if stop button is still visible

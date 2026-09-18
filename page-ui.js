@@ -1139,6 +1139,47 @@
       }
     });
 
+    const seriesListEl = container.querySelector('#pq-series-list');
+    if (seriesListEl) {
+      seriesListEl.addEventListener('click', (e) => {
+        const button = e.target.closest('button[data-action]');
+        if (!button) return;
+
+        const { action, seriesId } = button.dataset;
+        const actionHandlers = {
+          'load-series': () => window.loadSeriesById(seriesId),
+          'update-series': () => window.updateSeriesById(seriesId),
+          'rename-series': () => window.renameSeriesById(seriesId),
+          'export-series': () => window.exportSeriesById(seriesId),
+          'delete-series': () => window.deleteSeriesById(seriesId)
+        };
+
+        const handler = actionHandlers[action];
+        if (handler) {
+          handler();
+        }
+      });
+    }
+
+    const historyListEl = container.querySelector('#pq-history-list');
+    if (historyListEl) {
+      historyListEl.addEventListener('click', (e) => {
+        const button = e.target.closest('button[data-action]');
+        if (!button) return;
+
+        const { action, copyText } = button.dataset;
+        const actionHandlers = {
+          'copy-prompt': () => copyToClipboard(copyText),
+          'copy-response': () => copyToClipboard(copyText)
+        };
+
+        const handler = actionHandlers[action];
+        if (handler) {
+          handler();
+        }
+      });
+    }
+
     // Drag and drop support for queue items
     const queueListEl = container.querySelector('#pq-queue-list');
     
@@ -1471,11 +1512,11 @@
               • Updated ${date} ${time}
             </div>
             <div class="pq-series-actions">
-              <button onclick="window.loadSeriesById('${series.id}')">📂 Load</button>
-              <button onclick="window.updateSeriesById('${series.id}')">🔄 Update</button>
-              <button onclick="window.renameSeriesById('${series.id}')">✏️ Rename</button>
-              <button onclick="window.exportSeriesById('${series.id}')">📤 Export</button>
-              <button class="danger" onclick="window.deleteSeriesById('${series.id}')">🗑️ Delete</button>
+              <button data-action="load-series" data-series-id="${series.id}">📂 Load</button>
+              <button data-action="update-series" data-series-id="${series.id}">🔄 Update</button>
+              <button data-action="rename-series" data-series-id="${series.id}">✏️ Rename</button>
+              <button data-action="export-series" data-series-id="${series.id}">📤 Export</button>
+              <button data-action="delete-series" data-series-id="${series.id}" class="danger">🗑️ Delete</button>
             </div>
           </div>
         `;
@@ -1749,8 +1790,8 @@
             <div class="pq-history-response">${conv.response || 'No response captured'}</div>
             <div class="pq-history-meta">${date} • Tab: ${conv.tabId}</div>
             <div class="pq-history-actions">
-              <button onclick="copyToClipboard('${escapeHtml(conv.prompt)}')">Copy Prompt</button>
-              <button onclick="copyToClipboard('${escapeHtml(conv.response)}')">Copy Response</button>
+              <button data-action="copy-prompt" data-copy-text="${escapeHtml(conv.prompt || '')}">Copy Prompt</button>
+              <button data-action="copy-response" data-copy-text="${escapeHtml(conv.response || '')}">Copy Response</button>
             </div>
           </div>
         `;

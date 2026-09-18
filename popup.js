@@ -106,6 +106,41 @@ class PromptQueuer {
             this.exportHistory();
         });
 
+        const historyList = document.getElementById('history-list');
+        if (historyList) {
+            historyList.addEventListener('click', (event) => {
+                const button = event.target.closest('button[data-action]');
+                if (!button) return;
+
+                const index = Number(button.dataset.historyIndex);
+                const prompt = button.dataset.prompt || '';
+                const response = button.dataset.response || '';
+                const action = button.dataset.action;
+
+                const actionHandlers = {
+                    'copy-prompt': () => this.copyToClipboard(prompt),
+                    'copy-response': () => this.copyToClipboard(response),
+                    'requeue': () => this.addToQueue(prompt),
+                    'copy-column': () => this.copySelectedColumn(index),
+                    'copy-range': () => this.showColumnRangeSelector(index),
+                    'copy-all': () => this.copyAllColumns(index)
+                };
+
+                const handler = actionHandlers[action];
+                if (handler) {
+                    handler();
+                }
+            });
+
+            historyList.addEventListener('change', (event) => {
+                const select = event.target.closest('select[data-column-select]');
+                if (!select) return;
+
+                const index = Number(select.dataset.historyIndex);
+                this.showColumnPreview(index, select.value);
+            });
+        }
+
         // Debug button for storage issues
         document.addEventListener('keydown', (e) => {
             if (e.ctrlKey && e.shiftKey && e.key === 'D') {
@@ -799,24 +834,24 @@ class PromptQueuer {
                         <div class="history-response">${conv.response || 'No response captured'}</div>
                         <div class="history-meta">${date} • Tab: ${conv.tabId}</div>
                         <div class="history-actions">
-                            <button onclick="promptQueuer.copyToClipboard('${this.escapeHtml(conv.prompt)}')">Copy Prompt</button>
-                            <button onclick="promptQueuer.copyToClipboard('${this.escapeHtml(conv.response)}')">Copy Response</button>
-                            <button onclick="promptQueuer.addToQueue('${this.escapeHtml(conv.prompt)}')">Re-queue</button>
+                            <button data-action="copy-prompt" data-history-index="${index}" data-prompt="${this.escapeHtml(conv.prompt)}">Copy Prompt</button>
+                            <button data-action="copy-response" data-history-index="${index}" data-response="${this.escapeHtml(conv.response || '')}">Copy Response</button>
+                            <button data-action="requeue" data-history-index="${index}" data-prompt="${this.escapeHtml(conv.prompt)}">Re-queue</button>
                             ${hasTabularData ? `
                                 <div class="tabular-controls">
                                     <div class="tabular-info">
                                         📊 ${tabularData.type} (${tabularData.columns.length} columns)
                                     </div>
                                     <div class="column-selector">
-                                        <select id="column-select-${index}" onchange="promptQueuer.showColumnPreview(${index}, this.value)">
+                                        <select id="column-select-${index}" data-column-select="true" data-history-index="${index}">
                                             <option value="">Select column...</option>
                                             ${tabularData.columns.map((col, colIndex) => 
                                                 `<option value="${colIndex}">${colIndex + 1}: ${this.escapeHtml(col)}</option>`
                                             ).join('')}
                                         </select>
-                                        <button onclick="promptQueuer.copySelectedColumn(${index})" class="copy-column-btn">Copy Column</button>
-                                        <button onclick="promptQueuer.showColumnRangeSelector(${index})" class="range-selector-btn">Range</button>
-                                        <button onclick="promptQueuer.copyAllColumns(${index})" class="copy-all-btn">Copy All</button>
+                                        <button data-action="copy-column" data-history-index="${index}" class="copy-column-btn">Copy Column</button>
+                                        <button data-action="copy-range" data-history-index="${index}" class="range-selector-btn">Range</button>
+                                        <button data-action="copy-all" data-history-index="${index}" class="copy-all-btn">Copy All</button>
                                     </div>
                                     <div id="column-preview-${index}" class="column-preview"></div>
                                 </div>

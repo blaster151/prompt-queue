@@ -475,17 +475,19 @@ class MultiTabManager {
     }
   }
 
-  // Clean up tabs that are no longer active
+  // Clean up tabs that are no longer active. Active tabs must not be removed just because
+  // they have been registered for a while; we only evict truly inactive or stale tabs.
   cleanupInactiveTabs() {
     const now = Date.now();
     const toRemove = [];
     
     for (const [tabId, tab] of this.tabs.entries()) {
-      // More aggressive cleanup: remove tabs older than 5 minutes OR inactive for 2 minutes
-      const isOld = now - tab.registeredAt > 300000; // 5 minutes
-      const isInactive = !tab.isActive && now - (tab.lastActivity || tab.registeredAt) > 120000; // 2 minutes
+      const lastSeen = tab.lastActivity || tab.registeredAt;
+      const isIdleTooLong = !tab.isActive && now - lastSeen > 120000; // 2 minutes inactive
+      const isStaleRegistration = !tab.isActive && now - tab.registeredAt > 300000; // 5 minutes since registration
       
-      if (isOld || isInactive) {
+      // Never delete an active tab just because it has been around a while.
+      if (isIdleTooLong || isStaleRegistration) {
         toRemove.push(tabId);
       }
     }
